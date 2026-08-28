@@ -16,7 +16,7 @@ const cacheLib = require('./helpers/cache');
 const metricsLib = require('./helpers/metrics');
 
 const PORT = Number(process.env.AGG_PORT || process.env.MODELHUB_PORT || 8787);
-const DIR = process.env.AGG_DIR || process.env.MODELHUB_DIR || __dirname;
+const DIR = process.env.AGG_DIR || process.env.MODELHUB_DIR || path.join(__dirname, '..');
 const CONFIG_FILE = path.join(DIR, 'config.json');
 const AUTH_FILE = path.join(DIR, 'auth.json');
 const PREFS_FILE = path.join(DIR, 'prefs.json');
