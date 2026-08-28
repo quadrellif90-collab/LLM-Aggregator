@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "node server/index.js",
     "devUrl": "http://localhost:8787/",
-    "beforeBuildCommand": "node server/index.js",
+    "beforeBuildCommand": "node -e \"console.log('skipping frontend build')\"",
     "frontendDist": "../panel"
   },
   "app": {
@@ -25,6 +25,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "resources": {
+      "../server/": "server/",
+      "../config.json": "config.json",
+      "../prefs.json": "prefs.json",
+      "../pricing.json": "pricing.json",
+      "../panel/": "panel/"
+    }
   }
 }
