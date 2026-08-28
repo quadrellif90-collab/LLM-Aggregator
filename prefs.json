@@ -1,0 +1,13 @@
+{
+  "strategy": {
+    "auto": "autoroute",
+    "auto-code": "autoroute",
+    "auto-reasoning": "autoroute",
+    "auto-fast": "autoroute",
+    "free-pool": "autoroute"
+  },
+  "enhancer": { "enabled": true, "maxChars": 4000, "timeoutMs": 12000 },
+  "features": { "cache": true, "autoProbe": true },
+  "enabled": {},
+  "profiles": {}
+}
