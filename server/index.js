@@ -16,7 +16,8 @@ const cacheLib = require('./helpers/cache');
 const metricsLib = require('./helpers/metrics');
 
 const PORT = Number(process.env.AGG_PORT || process.env.MODELHUB_PORT || 8787);
-const DIR = process.env.AGG_DIR || process.env.MODELHUB_DIR || path.join(__dirname, '..');
+const APP_ROOT = process.pkg ? path.dirname(process.execPath) : path.join(__dirname, '..');
+const DIR = process.env.AGG_DIR || process.env.MODELHUB_DIR || APP_ROOT;
 const CONFIG_FILE = path.join(DIR, 'config.json');
 const AUTH_FILE = path.join(DIR, 'auth.json');
 const PREFS_FILE = path.join(DIR, 'prefs.json');
@@ -229,8 +230,8 @@ function requireToken(req, res) {
 
 function servePanel(req, res, urlPath) {
   const rel = urlPath === '/' ? '/panel/index.html' : urlPath;
-  const file = path.join(__dirname, '..', rel);
-  const root = path.join(__dirname, '..');
+  const file = path.join(APP_ROOT, rel);
+  const root = APP_ROOT;
   if (!file.startsWith(root)) return sendError(res, 403, 'forbidden');
   fs.readFile(file, (e, buf) => {
     if (e) return sendError(res, 404, 'not found');

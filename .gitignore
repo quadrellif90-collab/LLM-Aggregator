@@ -1,6 +1,7 @@
 node_modules
 .env
 *.log
+llm-aggregator.exe
 dist/
 build/
 .idea/
