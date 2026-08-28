@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "LLM Aggregator",
+  "version": "0.1.0",
+  "identifier": "com.llmaggregator.app",
+  "build": {
+    "beforeDevCommand": "node server/index.js",
+    "devUrl": "http://localhost:8787/",
+    "beforeBuildCommand": "node server/index.js",
+    "frontendDist": "../panel"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "LLM Aggregator",
+        "width": 1100,
+        "height": 720,
+        "url": "http://localhost:8787/",
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
+}

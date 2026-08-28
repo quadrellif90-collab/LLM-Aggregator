@@ -1,0 +1,20 @@
+{
+  "name": "llm-aggregator",
+  "version": "0.1.0",
+  "description": "Local OpenAI-compatible LLM gateway with autorouting, failover and a Tauri control panel",
+  "license": "MIT",
+  "main": "server/index.js",
+  "scripts": {
+    "server": "node server/index.js",
+    "start": "node server/index.js",
+    "tauri": "tauri",
+    "lint": "eslint server"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

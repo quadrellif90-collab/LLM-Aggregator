@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LLM Aggregator</title>
+  <link rel="stylesheet" href="/panel/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>LLM Aggregator</h1>
+    <span id="status" class="badge">…</span>
+  </header>
+  <main>
+    <section class="card">
+      <h2>Profiles</h2>
+      <ul id="profiles"></ul>
+    </section>
+    <section class="card">
+      <h2>Providers &amp; Keys</h2>
+      <ul id="providers"></ul>
+      <form id="keyForm">
+        <input id="keyName" placeholder="provider authId (e.g. openai)" />
+        <input id="keyValue" type="password" placeholder="API key" />
+        <button type="submit">Save key</button>
+      </form>
+    </section>
+    <section class="card">
+      <h2>Try it</h2>
+      <textarea id="prompt" placeholder="Ask anything…"></textarea>
+      <div class="row">
+        <select id="profileSel"></select>
+        <button id="sendBtn">Send</button>
+      </div>
+      <pre id="out"></pre>
+    </section>
+  </main>
+  <script src="/panel/app.js"></script>
+</body>
+</html>

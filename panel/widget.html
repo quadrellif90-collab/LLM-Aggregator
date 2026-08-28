@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Aggregator Widget</title>
+  <style>
+    body { font: 13px system-ui, sans-serif; background: #161a21; color: #e6e6e6; margin: 0; padding: 10px; border-radius: 10px; }
+    textarea { width: 100%; height: 70px; background: #0c0f14; color: #e6e6e6; border: 1px solid #2a3140; border-radius: 8px; padding: 6px; }
+    button { margin-top: 6px; background: #3b82f6; color: #fff; border: 0; border-radius: 8px; padding: 6px 12px; }
+  </style>
+</head>
+<body>
+  <textarea id="q" placeholder="Quick ask…"></textarea>
+  <button onclick="ask()">Ask</button>
+  <pre id="a" style="white-space:pre-wrap"></pre>
+  <script>
+    async function ask() {
+      const r = await fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'auto', stream: false, messages: [{ role: 'user', content: document.getElementById('q').value }] }),
+      });
+      const j = await r.json();
+      document.getElementById('a').textContent = (j.choices && j.choices[0].message.content) || JSON.stringify(j);
+    }
+  </script>
+</body>
+</html>
