@@ -166,7 +166,7 @@ function proxyRequest(prov, modelId, data, res, onError) {
             const parsed = JSON.parse(raw);
             const out = kind === 'anthropic'
               ? { id: 'chatcmpl-' + modelId, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, message: { role: 'assistant', content: protocols.textOf(parsed.content) }, finish_reason: 'stop' }] }
-              : { id: 'chatcmpl-' + modelId, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, message: { role: 'assistant', content: (parsed.candidates[0].content.parts[0].text) }, finish_reason: 'stop' }] };
+              : { id: 'chatcmpl-' + modelId, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, message: { role: 'assistant', content: parsed.candidates[0].content.parts[0].text }, finish_reason: 'stop' }] };
             res.writeHead(200, { 'content-type': 'application/json' });
             res.end(JSON.stringify(out));
           } catch (e) {
@@ -245,10 +245,12 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
-function readJsonBody(req, cb) {
+function readJsonBody(req, res, cb) {
   let buf = '';
   req.on('data', (d) => (buf += d));
-  req.on('end', () => { try { cb(JSON.parse(buf || '{}')); } catch (e) { sendError(res, 400, 'bad json'); } });
+  req.on('end', () => {
+    try { cb(JSON.parse(buf || '{}')); } catch (e) { sendError(res, 400, 'bad json'); }
+  });
 }
 
 function handleHub(req, res, p, u) {
@@ -265,7 +267,7 @@ function handleHub(req, res, p, u) {
     return json(res, 200, Object.values(models).filter((m) => !prov || m.provider === prov));
   }
   if (p === '/hub/profile' && req.method === 'POST') {
-    return readJsonBody(req, ({ name, ids, strategy }) => {
+    return readJsonBody(req, res, ({ name, ids, strategy }) => {
       if (!name) return sendError(res, 400, 'name required');
       prefs.profiles = prefs.profiles || {};
       prefs.profiles[name] = ids || profileIds(name);
@@ -275,14 +277,14 @@ function handleHub(req, res, p, u) {
     });
   }
   if (p === '/hub/features' && req.method === 'POST') {
-    return readJsonBody(req, (obj) => {
+    return readJsonBody(req, res, (obj) => {
       prefs.features = Object.assign(prefs.features || {}, obj);
       storage.writeJSON(PREFS_FILE, prefs, logFn);
       json(res, 200, { ok: true });
     });
   }
   if (p === '/hub/key' && req.method === 'POST') {
-    return readJsonBody(req, ({ name, key }) => {
+    return readJsonBody(req, res, ({ name, key }) => {
       if (!name || !key) return sendError(res, 400, 'name and key required');
       authStore.entries = authStore.entries || [];
       const ex = authStore.entries.find((x) => x.name === name);
