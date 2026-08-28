@@ -1,0 +1,9 @@
+node_modules
+.env
+*.log
+dist/
+build/
+.idea/
+.vscode/
+.osx/
+.DS_Store
