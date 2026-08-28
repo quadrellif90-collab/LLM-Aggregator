@@ -26,7 +26,7 @@ jobs:
       - name: Install pkg
         run: npm install -g pkg@5
       - name: Build standalone executable
-        run: pkg server/index.js --targets node18-win-x64 --output dist/llm-aggregator.exe
+        run: pkg server/index.js --targets node18-win-x64 --output dist/llm-aggregator.exe --icon icon.ico
       - name: Assemble distributable
         run: |
           cd dist
