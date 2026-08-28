@@ -1,0 +1,16 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: #0f1115; color: #e6e6e6; }
+header { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid #222; }
+h1 { font-size: 18px; margin: 0; }
+.badge { background: #1f2937; padding: 4px 10px; border-radius: 999px; font-size: 12px; }
+main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 18px; }
+.card { background: #161a21; border: 1px solid #232833; border-radius: 12px; padding: 16px; }
+.card h2 { margin-top: 0; font-size: 14px; color: #9aa4b2; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { padding: 6px 0; border-bottom: 1px solid #1c212b; }
+textarea, input, select { width: 100%; background: #0c0f14; color: #e6e6e6; border: 1px solid #2a3140; border-radius: 8px; padding: 8px; }
+.row { display: flex; gap: 8px; margin-top: 8px; }
+button { background: #3b82f6; color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+button:hover { background: #2563eb; }
+pre { white-space: pre-wrap; background: #0c0f14; border: 1px solid #2a3140; border-radius: 8px; padding: 10px; max-height: 240px; overflow: auto; }
