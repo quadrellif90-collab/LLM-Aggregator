@@ -326,6 +326,14 @@ const server = http.createServer((req, res) => {
 function start() {
   authStore = storage.readJSON(AUTH_FILE, { entries: [] });
   rebuildRegistry();
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      logFn('Port ' + PORT + ' already in use - another instance may be running. Open http://127.0.0.1:' + PORT + '/ or stop the other instance.');
+      process.exit(0);
+    } else {
+      throw err;
+    }
+  });
   server.listen(PORT, () => logFn('LLM-Aggregator gateway listening on :' + PORT));
 }
 
