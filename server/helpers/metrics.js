@@ -23,6 +23,21 @@ function promMetrics(state) {
   out += '# HELP llm_aggregator_cost_total Estimated total cost in currency units.\n';
   out += '# TYPE llm_aggregator_cost_total counter\n';
   out += 'llm_aggregator_cost_total ' + (state.cost || 0).toFixed(6) + '\n';
+  if (Array.isArray(state.gatewayKeys)) {
+    out += '# HELP aggregator_gateway_keys_total Number of configured gateway keys.\n';
+    out += '# TYPE aggregator_gateway_keys_total gauge\n';
+    out += 'aggregator_gateway_keys_total ' + state.gatewayKeys.length + '\n';
+  }
+  let gTokens = 0;
+  let gCost = 0;
+  const gu = state.keyUsage instanceof Map ? state.keyUsage : new Map();
+  gu.forEach((u) => { gTokens += u.tokens || 0; gCost += u.spent || 0; });
+  out += '# HELP aggregator_gateway_key_tokens_total Tokens billed to gateway keys.\n';
+  out += '# TYPE aggregator_gateway_key_tokens_total counter\n';
+  out += 'aggregator_gateway_key_tokens_total ' + gTokens + '\n';
+  out += '# HELP aggregator_gateway_key_cost_total Cost billed to gateway keys.\n';
+  out += '# TYPE aggregator_gateway_key_cost_total counter\n';
+  out += 'aggregator_gateway_key_cost_total ' + gCost.toFixed(6) + '\n';
   return out;
 }
 

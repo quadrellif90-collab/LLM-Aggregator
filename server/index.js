@@ -5,6 +5,7 @@ const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const crypto = require('node:crypto');
 
 const pricingLib = require('./helpers/pricing');
 const cryptoLib = require('./helpers/crypto');
@@ -27,6 +28,17 @@ const CACHE_ENABLED = (process.env.AGG_CACHE || '1') !== '0';
 const UPSTREAM_TIMEOUT_MS = 15000;
 const UPSTREAM_TIMEOUT_NONSTREAM_MS = 30000;
 const DEFAULT_PROFILES = ['auto', 'auto-code', 'auto-reasoning', 'auto-fast', 'free-pool'];
+const STRATEGIES = ['order', 'autoroute', 'cheapest', 'fastest', 'least-used', 'random', 'cascade'];
+const RATE_WINDOW_MS = 60000;
+const RATE_MAX = 120;
+const rateBuckets = new Map();
+const REQ_LOG_MAX = 200;
+const reqLog = [];
+const ENHANCE_PLUGINS = {
+  concise: { label: 'Concise', text: 'Be concise and direct.' },
+  english: { label: 'English', text: 'Respond in English.' },
+  codepro: { label: 'Code pro', text: 'You are an expert software engineer. Prefer correct, minimal code.' }
+};
 
 let models = {};
 let providers = {};
@@ -47,6 +59,47 @@ function logFn(msg) {
   try { fs.appendFileSync(LOG_FILE, new Date().toISOString() + ' ' + msg + '\n'); } catch (e) {}
 }
 
+function normalizePrefs() {
+  prefs = prefs || {};
+  if (!Array.isArray(prefs.gatewayKeys)) prefs.gatewayKeys = [];
+  if (!prefs.keylimits || typeof prefs.keylimits !== 'object') prefs.keylimits = {};
+  if (!prefs.strategy || typeof prefs.strategy !== 'object') prefs.strategy = {};
+  if (!prefs.enhancer || typeof prefs.enhancer !== 'object') prefs.enhancer = {};
+  if (!prefs.features || typeof prefs.features !== 'object') prefs.features = {};
+  if (!prefs.profiles || typeof prefs.profiles !== 'object') prefs.profiles = {};
+  if (!prefs.enabled || typeof prefs.enabled !== 'object') prefs.enabled = {};
+}
+
+function recordRequest(entry) {
+  entry.ts = Date.now();
+  reqLog.push(entry);
+  if (reqLog.length > REQ_LOG_MAX) reqLog.shift();
+}
+
+function settingsCfg() {
+  const s = prefs.settings || {};
+  const num = (k, d) => (Number.isFinite(s[k]) ? s[k] : d);
+  return {
+    port: config.port,
+    verifyMs: num('verifyMs', 900000),
+    verifyTopK: num('verifyTopK', 6),
+    failoverMs: num('failoverMs', 45000),
+    cacheTtlMs: num('cacheTtlMs', 600000),
+    tokenSet: !!(process.env.AGG_TOKEN || process.env.MODELHUB_TOKEN || prefs.controlToken)
+  };
+}
+
+function enhancerCfg() {
+  const e = prefs.enhancer || {};
+  return {
+    enabled: typeof e.enabled === 'boolean' ? e.enabled : true,
+    model: e.model || null,
+    maxChars: e.maxChars || 4000,
+    timeoutMs: e.timeoutMs || 12000,
+    plugins: Array.isArray(e.plugins) ? e.plugins : []
+  };
+}
+
 function authKeyFor(name) {
   const e = (authStore.entries || []).find((x) => x.name === name);
   if (!e) return null;
@@ -55,6 +108,53 @@ function authKeyFor(name) {
   } catch (err) {
     return e.key;
   }
+}
+
+const keyUsage = new Map();
+function keyIdFor(req) {
+  const a = typeof req.headers['authorization'] === 'string' ? req.headers['authorization'].replace(/^Bearer\s+/i, '') : '';
+  return a || req.headers['x-api-key'] || null;
+}
+function keyLimit(key) {
+  if (!key) return null;
+  const lim = (prefs.keylimits && prefs.keylimits[key]) || {};
+  return { tokens: lim.tokens || 0, spend: lim.spend || 0 };
+}
+function keyUsed(key) { return keyUsage.get(key) || { tokens: 0, spent: 0 }; }
+function recordKeyUsage(key, tokens, cost) {
+  if (!key) return;
+  const u = keyUsage.get(key) || { tokens: 0, spent: 0 };
+  u.tokens += tokens || 0;
+  u.spent += cost || 0;
+  keyUsage.set(key, u);
+}
+function keyOverLimit(key) {
+  const lim = keyLimit(key);
+  if (!lim) return false;
+  const u = keyUsage.get(key) || { tokens: 0, spent: 0 };
+  if (lim.tokens && u.tokens >= lim.tokens) return true;
+  if (lim.spend && u.spent >= lim.spend) return true;
+  return false;
+}
+function gatewayAuthorized(req) {
+  const a = typeof req.headers['authorization'] === 'string' ? req.headers['authorization'].replace(/^Bearer\s+/i, '') : '';
+  const alt = req.headers['x-api-key'] || '';
+  const key = a || alt || null;
+  if (!prefs.gatewayKeys || !prefs.gatewayKeys.length) return true;
+  const ok = prefs.gatewayKeys.includes(a) || prefs.gatewayKeys.includes(alt);
+  if (!ok) return false;
+  if (key && keyOverLimit(key)) return false;
+  return true;
+}
+function controlRateLimited(req) {
+  if (!prefs.controlToken && !process.env.AGG_TOKEN && !process.env.MODELHUB_TOKEN) return false;
+  const key = req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const b = rateBuckets.get(key) || { count: 0, resetAt: now + RATE_WINDOW_MS };
+  if (now > b.resetAt) { b.count = 0; b.resetAt = now + RATE_WINDOW_MS; }
+  b.count++;
+  rateBuckets.set(key, b);
+  return b.count > RATE_MAX;
 }
 
 function rebuildRegistry() {
@@ -118,12 +218,35 @@ function estimateTokens(text) {
 }
 
 function tallyUsage(modelId, promptTokens, completionTokens) {
-  if (!modelId || !models[modelId]) return;
+  if (!modelId || !models[modelId]) return 0;
   usage[modelId] = (usage[modelId] || 0) + 1;
   const pr = pricingLib.priceFor(pricing, models[modelId].provider, modelId);
-  costTotal += pricingLib.computeCost(pr, promptTokens, completionTokens);
+  const cost = pricingLib.computeCost(pr, promptTokens, completionTokens);
+  costTotal += cost;
   tokensTotal += promptTokens + completionTokens;
   requestsTotal += 1;
+  return cost;
+}
+
+function resolveProfile(requested, messages) {
+  if (requested && requested !== 'auto' && String(requested).startsWith('auto-intent') === false) return requested;
+  const last = [...(messages || [])].reverse().find((m) => m && m.role === 'user');
+  const txt = last ? (typeof last.content === 'string' ? last.content : JSON.stringify(last.content || '')) : '';
+  const it = modelsLib.classifyPrompt(txt);
+  if (it.code) return 'auto-code';
+  if (it.reasoning) return 'auto-reasoning';
+  if (it.fast) return 'auto-fast';
+  return 'auto';
+}
+
+function maybeExperiment(profile, order) {
+  const e = prefs.experiments;
+  if (!e || !e.enabled || !e.candidate) return order;
+  if (e.profile && e.profile !== profile) return order;
+  if (order[0] === e.candidate || !models[e.candidate]) return order;
+  const pct = Math.max(0, Math.min(100, e.splitPct || 0));
+  if (Math.floor(Math.random() * 100) < pct) return [e.candidate, ...order.filter((id) => id !== e.candidate)];
+  return order;
 }
 
 function selectModel(profile, body) {
@@ -141,8 +264,8 @@ function selectModel(profile, body) {
       return variants[variants.length - 1];
     }
   }
-  const ids = profileIds(profile);
-  const valid = ids.filter((id) => models[id] && !modelsLib.CHAT_BLOCK.test(id));
+  const ids = maybeExperiment(profile, profileIds(profile));
+  const valid = ids.filter((id) => models[id] && !modelsLib.CHAT_BLOCK.test(id) && prefs.enabled[id] !== false);
   const strategy = (prefs.strategy && prefs.strategy[profile]) || 'autoroute';
   if (strategy === 'order' || valid.length === 0) return valid[0] || ids[0];
   if (strategy === 'random') return valid[Math.floor(Math.random() * valid.length)];
@@ -225,7 +348,8 @@ function streamUpstream(up, res, kind, modelId, onError, ctx) {
     res.write('data: [DONE]\n\n');
     res.end();
     if (ctx) {
-      tallyUsage(modelId, ctx.promptTokens, estimateTokens(seenText));
+      const cost = tallyUsage(modelId, ctx.promptTokens, estimateTokens(seenText));
+      recordKeyUsage(ctx.gkey, ctx.promptTokens + estimateTokens(seenText), cost);
       if (ctx.start) latency[modelId] = Date.now() - ctx.start;
     }
   });
@@ -236,7 +360,8 @@ function completeNonStream(res, rawText, modelId, ctx) {
   try {
     const v = JSON.parse(rawText);
     const text = (v.choices && v.choices[0] && v.choices[0].message && v.choices[0].message.content) || '';
-    tallyUsage(modelId, ctx.promptTokens, estimateTokens(text));
+    const cost = tallyUsage(modelId, ctx.promptTokens, estimateTokens(text));
+    recordKeyUsage(ctx.gkey, ctx.promptTokens + estimateTokens(text), cost);
     if (ctx.start) latency[modelId] = Date.now() - ctx.start;
     if (ctx.cacheIt) {
       if (responseCache.size >= 200) responseCache.delete(responseCache.keys().next().value);
@@ -317,6 +442,8 @@ function applyEnhancer(body, profile) {
   else guidance = 'Be helpful and concise.';
   const max = prefs.enhancer.maxChars || 4000;
   guidance = guidance.slice(0, max);
+  const pluginText = (prefs.enhancer.plugins || []).filter((id) => ENHANCE_PLUGINS[id]).map((id) => ENHANCE_PLUGINS[id].text).join('\n');
+  if (pluginText) guidance = guidance + '\n' + pluginText;
   const out = JSON.parse(JSON.stringify(body));
   out.messages = out.messages || [];
   const sys = out.messages.find((m) => m.role === 'system');
@@ -343,9 +470,94 @@ function fireWebhook(message) {
   } catch (e) {}
 }
 
+function fetchJSON(targetURL, apiKey) {
+  return new Promise((resolve, reject) => {
+    let u;
+    try { u = new URL(targetURL); } catch (e) { return reject(new Error('bad url')); }
+    const transport = u.protocol === 'https:' ? https : http;
+    const req = transport.request({
+      method: 'GET',
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname + (u.search || ''),
+      headers: { Authorization: apiKey ? 'Bearer ' + apiKey : '', Accept: 'application/json' },
+      timeout: 15000
+    }, (up) => {
+      let b = '';
+      up.on('data', (d) => (b += d));
+      up.on('end', () => {
+        try { resolve(JSON.parse(b)); } catch (e) { reject(new Error('bad json')); }
+      });
+    });
+    req.on('error', (e) => reject(e));
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.end();
+  });
+}
+
+function modelsEndpoint(baseURL, name) {
+  baseURL = String(baseURL || '').replace(/\/+$/, '');
+  if (name === 'gemini') return baseURL + '/v1beta/models';
+  return baseURL + '/models';
+}
+
+function probeModel(modelId) {
+  const m = models[modelId];
+  if (!m) return Promise.resolve({ model: modelId, ok: false, error: 'unknown model' });
+  const prov = providers[m.provider];
+  if (!prov) return Promise.resolve({ model: modelId, ok: false, error: 'unknown provider' });
+  const { endpoint, payload, kind } = buildRequest(prov, modelId, {
+    model: modelId,
+    messages: [{ role: 'user', content: 'ping' }],
+    max_tokens: 1,
+    stream: false
+  });
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    const key = m.needsKey ? authKeyFor(m.authId) : null;
+    const headers = { 'content-type': 'application/json', accept: 'application/json' };
+    if (key) {
+      if (prov.name === 'anthropic') headers['x-api-key'] = key;
+      else headers['authorization'] = 'Bearer ' + key;
+    }
+    const u = new URL(endpoint);
+    const transport = u.protocol === 'https:' ? https : http;
+    const r = transport.request({
+      method: 'POST',
+      hostname: u.hostname,
+      port: u.port || (u.protocol === 'https:' ? 443 : 80),
+      path: u.pathname + u.search,
+      headers,
+      timeout: 15000
+    }, (up) => {
+      let b = '';
+      up.on('data', (d) => (b += d));
+      up.on('end', () => {
+        const ms = Date.now() - t0;
+        if (up.statusCode && up.statusCode >= 200 && up.statusCode < 300) {
+          latency[modelId] = ms;
+          resolve({ model: modelId, ok: true, latencyMs: ms });
+        } else {
+          resolve({ model: modelId, ok: false, latencyMs: ms, error: 'HTTP ' + up.statusCode });
+        }
+      });
+    });
+    r.on('error', (e) => resolve({ model: modelId, ok: false, latencyMs: Date.now() - t0, error: (e && e.message) || String(e) }));
+    r.on('timeout', () => { r.destroy(new Error('timeout')); resolve({ model: modelId, ok: false, latencyMs: Date.now() - t0, error: 'timeout' }); });
+    r.write(JSON.stringify(payload));
+    r.end();
+  });
+}
+
 function handleChat(body, req, res) {
-  const profile = body.model && prefs.profiles && prefs.profiles[body.model] ? body.model : 'auto';
+  const gkey = keyIdFor(req);
+  const requested = body.model;
+  let profile = (requested && prefs.profiles && prefs.profiles[requested]) ? requested : null;
   let data = Object.assign({}, body);
+  if (body.intent || requested === 'auto-intent' || !profile) {
+    profile = resolveProfile(body.intent || requested, data.messages || []);
+  }
+  if (!prefs.profiles[profile]) profile = 'auto';
   if (prefs.enhancer && prefs.enhancer.enabled && !(prefs.enhance && prefs.enhance[profile] === false)) {
     data = applyEnhancer(data, profile);
   }
@@ -355,6 +567,7 @@ function handleChat(body, req, res) {
   const key = cacheLib.cacheKey(data);
   if (CACHE_ENABLED && !body.stream && responseCache.has(key)) {
     cacheHits++;
+    recordKeyUsage(gkey, 0, 0);
     return res.end(JSON.stringify(responseCache.get(key).value));
   }
   const promptTokens = estimateTokens(JSON.stringify(data.messages || []));
@@ -362,7 +575,7 @@ function handleChat(body, req, res) {
   const doRequest = (modelId, done) => {
     const prov = providers[models[modelId].provider];
     if (!prov) return done(new Error('unknown provider for ' + modelId));
-    const ctx = { promptTokens, cacheKey: key, cacheIt: CACHE_ENABLED && !body.stream, start: Date.now() };
+    const ctx = { promptTokens, cacheKey: key, cacheIt: CACHE_ENABLED && !body.stream, start: Date.now(), gkey };
     proxyRequest(prov, modelId, Object.assign({}, data, { model: modelId }), res, done, ctx);
   };
 
@@ -397,6 +610,7 @@ function handleChat(body, req, res) {
 }
 
 function handleEmbeddings(body, req, res) {
+  const gkey = keyIdFor(req);
   let prov = null;
   let modelId = body.model;
   if (modelId && models[modelId] && providers[models[modelId].provider] && (providers[models[modelId].provider].embeddings || models[modelId].embeddings)) {
@@ -432,8 +646,12 @@ function handleEmbeddings(body, req, res) {
           }
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ object: 'list', data, model: payload.model }));
-          tokensTotal += estimateTokens(JSON.stringify(body.input));
+          const pt = estimateTokens(JSON.stringify(body.input));
+          const pr = pricingLib.priceFor(pricing, prov.name, payload.model);
+          const cost = pricingLib.computeCost(pr, pt, 0);
+          tokensTotal += pt;
           requestsTotal += 1;
+          recordKeyUsage(gkey, pt, cost);
         } catch (e) {
           sendError(res, 502, 'embeddings parse error: ' + e.message);
         }
@@ -451,8 +669,13 @@ function sendError(res, code, msg) {
 }
 
 function requireToken(req, res) {
-  const token = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
-  return token === (process.env.AGG_TOKEN || process.env.MODELHUB_TOKEN || '');
+  const expected = process.env.AGG_TOKEN || process.env.MODELHUB_TOKEN || (prefs && prefs.controlToken) || '';
+  const h = typeof req.headers['authorization'] === 'string' ? req.headers['authorization'].replace(/^Bearer\s+/i, '') : '';
+  if (h === expected) return true;
+  if ((req.headers['x-modelhub-token'] || '') === expected) return true;
+  let q = '';
+  try { q = new URL(req.url, 'http://localhost').searchParams.get('token') || ''; } catch (e) {}
+  return q === expected;
 }
 
 function servePanel(req, res, urlPath) {
@@ -483,19 +706,52 @@ function readJsonBody(req, res, cb) {
 
 function handleHub(req, res, p, u) {
   if (p === '/hub/state' && req.method === 'GET') {
-    return json(res, 200, { models: Object.keys(models).length, providers: Object.keys(providers).length, profiles: prefs.profiles, cacheHits, cache: CACHE_ENABLED });
+    return json(res, 200, { models: Object.keys(models).length, providers: Object.keys(providers).length, profiles: prefs.profiles, cacheHits, cache: CACHE_ENABLED, gatewayKeys: prefs.gatewayKeys || [] });
   }
   if (p === '/hub/config' && req.method === 'GET') return json(res, 200, config);
   if (p === '/hub/prefs' && req.method === 'GET') return json(res, 200, prefs);
   if (p === '/hub/pricing' && req.method === 'GET') return json(res, 200, pricing);
+  if (p === '/hub/pricing' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      if (!body || !body.provider) return sendError(res, 400, 'provider required');
+      pricing.providers = pricing.providers || {};
+      pricing.providers[body.provider] = { input: Number(body.input) || 0, output: Number(body.output) || 0 };
+      storage.writeJSON(PRICING_FILE, pricing, logFn);
+      json(res, 200, { ok: true });
+    });
+  }
   if (p === '/hub/features' && req.method === 'GET') return json(res, 200, prefs.features || {});
   if (p === '/hub/cache' && req.method === 'GET') return json(res, 200, { entries: responseCache.size, enabled: CACHE_ENABLED });
+  if (p === '/hub/cache' && req.method === 'POST') {
+    responseCache.clear();
+    cacheHits = 0;
+    return json(res, 200, { ok: true });
+  }
+  if (p === '/hub/settings' && req.method === 'GET') return json(res, 200, settingsCfg());
+  if (p === '/hub/settings' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      const s = prefs.settings || (prefs.settings = {});
+      const bounds = { verifyMs: [30000, 86400000], verifyTopK: [3, 50], failoverMs: [5000, 600000], cacheTtlMs: [10000, 86400000] };
+      for (const [k, [min, max]] of Object.entries(bounds)) {
+        const v = Number(body[k]);
+        if (Number.isFinite(v)) s[k] = Math.min(max, Math.max(min, Math.round(v)));
+      }
+      let newToken = null;
+      if (body.regenerateToken === true) {
+        newToken = crypto.randomBytes(24).toString('hex');
+        prefs.controlToken = newToken;
+      }
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, settings: settingsCfg(), regeneratedToken: newToken });
+    });
+  }
+  if (p === '/hub/logs' && req.method === 'GET') return json(res, 200, { logs: reqLog.slice().reverse() });
   if (p === '/hub/models' && req.method === 'GET') {
     const prov = u.searchParams.get('provider');
     return json(res, 200, Object.values(models).filter((m) => !prov || m.provider === prov));
   }
   if (p === '/hub/usage' && req.method === 'GET') {
-    return json(res, 200, { usage, cost: costTotal, cacheHits, requests: requestsTotal, tokens: tokensTotal });
+    return json(res, 200, { usage, cost: costTotal, cacheHits, requests: requestsTotal, tokens: tokensTotal, gatewayKeys: (prefs.gatewayKeys || []).length, keyUsage: (prefs.gatewayKeys || []).map((k) => ({ key: k, limit: keyLimit(k), used: keyUsed(k) })) });
   }
   if (p === '/hub/providers' && req.method === 'GET') {
     const list = (config.providers || []).map((pr) => ({
@@ -555,6 +811,223 @@ function handleHub(req, res, p, u) {
       json(res, 200, { ok: true, webhook: prefs.webhook });
     });
   }
+  if (p === '/hub/strategy' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      if (!body || !body.profile) return sendError(res, 400, 'profile required');
+      if (!STRATEGIES.includes(body.strategy)) return sendError(res, 400, 'invalid strategy');
+      prefs.strategy = prefs.strategy || {};
+      prefs.strategy[body.profile] = body.strategy;
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, strategies: prefs.strategy });
+    });
+  }
+  if (p === '/hub/enhancer' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      const e = prefs.enhancer || (prefs.enhancer = {});
+      if (typeof body.enabled === 'boolean') e.enabled = body.enabled;
+      if (Array.isArray(body.plugins)) e.plugins = body.plugins.map(String);
+      if (body.model !== undefined) e.model = body.model || '';
+      if (Number.isFinite(body.maxChars)) e.maxChars = Math.max(200, body.maxChars);
+      if (Number.isFinite(body.timeoutMs)) e.timeoutMs = Math.max(1000, body.timeoutMs);
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, enhancer: enhancerCfg() });
+    });
+  }
+  if (p === '/hub/alerts' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      prefs.alerts = { webhook: (body.webhook || '') };
+      if (typeof body.webhook === 'string') prefs.webhook = body.webhook || null;
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, alerts: prefs.alerts });
+    });
+  }
+  if (p === '/hub/profile/delete' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      if (!body.name) return sendError(res, 400, 'name required');
+      if (DEFAULT_PROFILES.includes(body.name)) return sendError(res, 400, 'cannot delete default profile');
+      prefs.profiles = prefs.profiles || {};
+      delete prefs.profiles[body.name];
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, profiles: Object.keys(prefs.profiles) });
+    });
+  }
+  if (p === '/hub/toggle' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      if (!body.id) return sendError(res, 400, 'id required');
+      const flag = body.enabled !== false;
+      const prov = (config.providers || []).find((x) => x.name === body.id);
+      if (prov) {
+        prov.enabled = flag;
+        storage.writeJSON(CONFIG_FILE, config, logFn);
+        rebuildRegistry();
+      } else if (models[body.id]) {
+        prefs.enabled = prefs.enabled || {};
+        prefs.enabled[body.id] = flag;
+        storage.writeJSON(PREFS_FILE, prefs, logFn);
+      } else {
+        return sendError(res, 404, 'id not found');
+      }
+      json(res, 200, { ok: true });
+    });
+  }
+  if (p === '/hub/reorder' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      if (!body || !Array.isArray(body.order)) return sendError(res, 400, 'order required');
+      const prof = body.profile || 'auto';
+      prefs.profiles = prefs.profiles || {};
+      prefs.profiles[prof] = body.order.filter((id) => !!models[id]);
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true });
+    });
+  }
+  if (p === '/hub/gateway-keys' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      if (!body || !Array.isArray(body.keys)) return sendError(res, 400, 'keys array required');
+      prefs.gatewayKeys = body.keys.map((k) => String(k).trim()).filter(Boolean);
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, count: prefs.gatewayKeys.length });
+    });
+  }
+  if (p === '/hub/keys') {
+    if (req.method === 'GET') {
+      const keys = (prefs.gatewayKeys || []).map((k) => ({ key: k, limit: keyLimit(k), used: keyUsed(k) }));
+      return json(res, 200, { keys });
+    }
+    if (req.method === 'POST') {
+      return readJsonBody(req, res, (body) => {
+        if (body && typeof body === 'object' && Object.keys(body).some((k) => k !== 'key' && k !== 'tokens' && k !== 'spend')) {
+          let count = 0;
+          authStore.entries = authStore.entries || [];
+          for (const [provider, key] of Object.entries(body)) {
+            if (provider === 'key' || provider === 'tokens' || provider === 'spend') continue;
+            if (typeof key !== 'string' || !key.trim()) continue;
+            const enc = cryptoLib.encryptAuth(key.trim());
+            const ex = authStore.entries.find((x) => x.name === provider);
+            if (ex) ex.key = enc; else authStore.entries.push({ name: provider, key: enc });
+            count++;
+          }
+          if (count > 0) {
+            storage.writeJSON(AUTH_FILE, authStore, logFn);
+            return json(res, 200, { ok: true, count, imported: { keys: count } });
+          }
+        }
+        const k = (body && body.key) || (prefs.gatewayKeys && prefs.gatewayKeys[0]) || null;
+        if (!k) return sendError(res, 400, 'no gateway key');
+        prefs.keylimits = prefs.keylimits || {};
+        const lim = prefs.keylimits[k] || (prefs.keylimits[k] = {});
+        if (Number.isFinite(body.tokens)) lim.tokens = body.tokens;
+        if (Number.isFinite(body.spend)) lim.spend = body.spend;
+        storage.writeJSON(PREFS_FILE, prefs, logFn);
+        json(res, 200, { ok: true, key: k, limit: keyLimit(k) });
+      });
+    }
+  }
+  if (p === '/hub/experiments' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      prefs.experiments = prefs.experiments || {};
+      if (body.name && Array.isArray(body.variants)) {
+        if (!body.variants.length) return sendError(res, 400, 'variants required');
+        prefs.experiments[body.name] = { variants: body.variants, weight: body.weight || body.variants.map(() => 1) };
+      } else {
+        prefs.experiments = { enabled: !!body.enabled, profile: body.profile || 'auto', candidate: body.candidate || '', splitPct: Number.isFinite(body.splitPct) ? body.splitPct : 0 };
+      }
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, experiments: prefs.experiments });
+    });
+  }
+  if (p === '/hub/import' && req.method === 'POST') {
+    return readJsonBody(req, res, (inc) => {
+      if (!inc || (!inc.config && !inc.prefs && !inc.keys)) return sendError(res, 400, 'nothing to import');
+      const imported = { providers: 0, keys: 0, profiles: 0 };
+      if (inc.config && Array.isArray(inc.config.providers)) {
+        config = Object.assign({}, inc.config, { port: config.port });
+        imported.providers = config.providers.length;
+        storage.writeJSON(CONFIG_FILE, config, logFn);
+      }
+      if (inc.keys && typeof inc.keys === 'object') {
+        authStore.entries = authStore.entries || [];
+        if (Array.isArray(inc.keys.entries)) {
+          for (const e of inc.keys.entries) {
+            if (!e || !e.name) continue;
+            const val = typeof e.key === 'string' ? e.key : null;
+            if (!val) continue;
+            const ex = authStore.entries.find((x) => x.name === e.name);
+            if (ex) ex.key = val; else authStore.entries.push({ name: e.name, key: val });
+            imported.keys++;
+          }
+        } else {
+          for (const [k, v] of Object.entries(inc.keys)) {
+            if (typeof v !== 'string' || !v) continue;
+            authStore.entries.push({ name: k, key: v });
+            imported.keys++;
+          }
+        }
+        storage.writeJSON(AUTH_FILE, authStore, logFn);
+      }
+      if (inc.prefs && typeof inc.prefs === 'object') {
+        for (const k of ['enabled', 'profiles', 'strategy', 'gatewayKeys', 'enhancer', 'features']) {
+          if (inc.prefs[k] !== undefined) prefs[k] = inc.prefs[k];
+        }
+        normalizePrefs();
+        imported.profiles = Object.keys(prefs.profiles || {}).length;
+        storage.writeJSON(PREFS_FILE, prefs, logFn);
+      }
+      if (inc.pricing && typeof inc.pricing === 'object' && inc.pricing.providers) {
+        pricing = inc.pricing;
+        storage.writeJSON(PRICING_FILE, pricing, logFn);
+      }
+      rebuildRegistry();
+      json(res, 200, { ok: true, imported });
+    });
+  }
+  if (p === '/hub/discover' && req.method === 'POST') {
+    return readJsonBody(req, res, async (body) => {
+      const runProvider = async (pr) => {
+        try {
+          const key = pr.needsKey ? authKeyFor(pr.authId) : null;
+          const list = await fetchJSON(modelsEndpoint(pr.baseURL, pr.name), key);
+          const known = new Set((pr.models || []).map((m) => m.name));
+          pr.models = pr.models || [];
+          let added = 0;
+          for (const it of (list.data || [])) {
+            const name = typeof it === 'string' ? it : it.id;
+            if (!name || known.has(name)) continue;
+            pr.models.push({ name, label: name, free: false });
+            known.add(name);
+            added++;
+          }
+          return { provider: pr.name, added, total: pr.models.length, error: '' };
+        } catch (e) {
+          return { provider: pr.name, added: 0, total: (pr.models || []).length, error: String((e && e.message) || e).slice(0, 120) };
+        }
+      };
+      if (body.provider) {
+        const pr = (config.providers || []).find((x) => x.name === body.provider);
+        if (!pr) return sendError(res, 404, 'provider not found');
+        const results = [await runProvider(pr)];
+        storage.writeJSON(CONFIG_FILE, config, logFn);
+        rebuildRegistry();
+        return json(res, 200, { ok: true, results });
+      }
+      const targets = (config.providers || []).filter((pr) => /^https?:/i.test(pr.baseURL || ''));
+      const results = [];
+      for (const pr of targets) results.push(await runProvider(pr));
+      storage.writeJSON(CONFIG_FILE, config, logFn);
+      rebuildRegistry();
+      json(res, 200, { ok: true, scanned: targets.length, results });
+    });
+  }
+  if (p === '/hub/probe' && req.method === 'POST') {
+    return readJsonBody(req, res, async (body) => {
+      const targets = body.id ? [body.id].filter((id) => models[id]) : Object.keys(models).filter((id) => models[id].enabled !== false);
+      const results = [];
+      for (const id of targets) {
+        const r = await Promise.race([probeModel(id), new Promise((res2) => setTimeout(() => res2({ model: id, ok: false, error: 'probe timeout', latencyMs: 15000 }), 15000))]);
+        results.push(r);
+      }
+      json(res, 200, { ok: true, models: results });
+    });
+  }
   if (p === '/hub/cache/clear' && req.method === 'POST') {
     responseCache.clear();
     return json(res, 200, { ok: true, entries: 0 });
@@ -602,7 +1075,19 @@ function handleHub(req, res, p, u) {
     });
   }
   if (p === '/hub/export' && req.method === 'GET') {
-    return json(res, 200, { config, prefs, pricing, auth: { entries: (authStore.entries || []).map((e) => ({ name: e.name })) } });
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      version: 'LLM-Aggregator 0.1.0',
+      config,
+      pricing,
+      prefs,
+      keys: authStore
+    };
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="llm-aggregator-export-' + new Date().toISOString().slice(0, 10) + '.json"'
+    });
+    return res.end(JSON.stringify(payload, null, 2));
   }
   sendError(res, 404, 'unknown hub endpoint');
 }
@@ -610,26 +1095,31 @@ function handleHub(req, res, p, u) {
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://localhost');
   const p = u.pathname;
+  const t0 = Date.now();
+  res.on('finish', () => recordRequest({ method: req.method, path: p, status: res.statusCode, ms: Date.now() - t0 }));
   if (req.method === 'GET' && (p === '/' || p.startsWith('/panel'))) return servePanel(req, res, p);
   if (req.method === 'GET' && p === '/v1/health') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: true, models: Object.keys(models).length })); }
-  if (req.method === 'GET' && p === '/metrics') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(metricsLib.promMetrics({ startTime, cacheHits, models, cost: costTotal, tokens: tokensTotal, requests: requestsTotal })); }
+  if (req.method === 'GET' && p === '/metrics') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(metricsLib.promMetrics({ startTime, cacheHits, models, cost: costTotal, tokens: tokensTotal, requests: requestsTotal, gatewayKeys: prefs.gatewayKeys || [], keyUsage })); }
   if (req.method === 'GET' && p === '/v1/models') {
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ object: 'list', data: Object.keys(models).map((id) => ({ id, object: 'model', provider: models[id].provider })) }));
   }
   if (p === '/v1/chat/completions' && req.method === 'POST') {
+    if (!gatewayAuthorized(req)) return sendError(res, 401, 'invalid or missing gateway key');
     let buf = '';
     req.on('data', (d) => (buf += d));
     req.on('end', () => { try { handleChat(JSON.parse(buf), req, res); } catch (e) { sendError(res, 400, 'bad request: ' + e.message); } });
     return;
   }
   if (p === '/v1/embeddings' && req.method === 'POST') {
+    if (!gatewayAuthorized(req)) return sendError(res, 401, 'invalid or missing gateway key');
     let buf = '';
     req.on('data', (d) => (buf += d));
     req.on('end', () => { try { handleEmbeddings(JSON.parse(buf), req, res); } catch (e) { sendError(res, 400, 'bad request: ' + e.message); } });
     return;
   }
   if (p.startsWith('/hub/')) {
+    if (controlRateLimited(req)) return sendError(res, 429, 'rate limited');
     if (!requireToken(req, res)) return sendError(res, 401, 'unauthorized');
     return handleHub(req, res, p, u);
   }
@@ -638,6 +1128,7 @@ const server = http.createServer((req, res) => {
 
 function start() {
   authStore = storage.readJSON(AUTH_FILE, { entries: [] });
+  normalizePrefs();
   rebuildRegistry();
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -652,4 +1143,4 @@ function start() {
 
 if (require.main === module) start();
 
-module.exports = { start, server, selectModel };
+module.exports = { start, server, selectModel, resolveProfile };

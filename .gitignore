@@ -8,6 +8,8 @@ icon.png
 dist/
 build/
 .idea/
+src-tauri/target/
+src-tauri/gen/
 .vscode/
 .osx/
 .DS_Store

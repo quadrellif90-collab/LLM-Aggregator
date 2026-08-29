@@ -2,11 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LLM Aggregator",
   "version": "0.1.0",
-  "identifier": "com.llmaggregator.app",
+  "identifier": "com.llmaggregator.desktop",
   "build": {
     "beforeDevCommand": "node server/index.js",
-    "devUrl": "http://localhost:8787/",
-    "beforeBuildCommand": "node -e \"console.log('skipping frontend build')\"",
+    "devUrl": "http://localhost:9090/",
+    "beforeBuildCommand": "echo skip",
     "frontendDist": "../panel"
   },
   "app": {
@@ -15,8 +15,10 @@
         "title": "LLM Aggregator",
         "width": 1100,
         "height": 720,
-        "url": "http://localhost:8787/",
-        "resizable": true
+        "url": "http://localhost:9090/",
+        "resizable": true,
+        "visible": false,
+        "decorations": true
       }
     ],
     "security": {
@@ -32,6 +34,12 @@
       "../prefs.json": "prefs.json",
       "../pricing.json": "pricing.json",
       "../panel/": "panel/"
-    }
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
   }
 }
