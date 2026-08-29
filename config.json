@@ -1,0 +1,331 @@
+{
+  "port": 9090,
+  "providers": [
+    {
+      "name": "pollinations",
+      "label": "Pollinations (no key)",
+      "needsKey": false,
+      "authId": null,
+      "baseURL": "https://text.pollinations.ai/v1",
+      "models": [
+        {
+          "id": "openai",
+          "free": true
+        },
+        {
+          "id": "openai-large",
+          "free": true
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "glhf",
+      "label": "glhf (no key)",
+      "needsKey": false,
+      "authId": null,
+      "baseURL": "https://glhf.chat/api/openai/v1",
+      "models": [
+        {
+          "id": "hf:meta-llama/Llama-3.3-70B-Instruct",
+          "free": true
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "llm7",
+      "label": "LLM7.io (no key)",
+      "needsKey": false,
+      "authId": null,
+      "baseURL": "https://api.llm7.io/v1",
+      "models": [
+        {
+          "id": "deepseek-r1",
+          "free": true
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "cerebras",
+      "label": "Cerebras",
+      "needsKey": true,
+      "authId": "cerebras",
+      "baseURL": "https://api.cerebras.ai/v1",
+      "models": [
+        {
+          "id": "llama-3.3-70b",
+          "free": true
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "groq",
+      "label": "Groq",
+      "needsKey": true,
+      "authId": "groq",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "models": [
+        {
+          "id": "llama-3.3-70b-versatile",
+          "free": true
+        },
+        {
+          "id": "llama-3.1-8b-instant",
+          "free": true
+        },
+        {
+          "id": "mixtral-8x7b-32768",
+          "free": true
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "nvidia",
+      "label": "NVIDIA NIM",
+      "needsKey": true,
+      "authId": "nvidia",
+      "baseURL": "https://integrate.api.nvidia.com/v1",
+      "models": [
+        {
+          "id": "mistralai/mixtral-8x7b-instruct-v0.1",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "openrouter",
+      "label": "OpenRouter",
+      "needsKey": true,
+      "authId": "openrouter",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "models": [
+        {
+          "id": "google/gemini-2.0-flash-thinking-exp-01-21",
+          "free": false
+        },
+        {
+          "id": "deepseek/deepseek-r1",
+          "free": false
+        },
+        {
+          "id": "anthropic/claude-3.5-sonnet",
+          "free": false
+        },
+        {
+          "id": "openai/gpt-4o-mini",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "minimax",
+      "label": "MiniMax",
+      "needsKey": true,
+      "authId": "minimax",
+      "baseURL": "https://api.minimax.chat/v1",
+      "models": [
+        {
+          "id": "MiniMax-Text-01",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "cohere",
+      "label": "Cohere",
+      "needsKey": true,
+      "authId": "cohere",
+      "baseURL": "https://api.cohere.ai/v1",
+      "models": [
+        {
+          "id": "command-r-plus",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "upstage",
+      "label": "Upstage",
+      "needsKey": true,
+      "authId": "upstage",
+      "baseURL": "https://api.upstage.ai/v1",
+      "models": [
+        {
+          "id": "solar-pro",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "chutes",
+      "label": "Chutes AI",
+      "needsKey": true,
+      "authId": "chutes",
+      "baseURL": "https://api.chutes.ai/v1",
+      "models": [
+        {
+          "id": "Qwen/Qwen2.5-72B-Instruct",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "alibaba",
+      "label": "Alibaba Qwen",
+      "needsKey": true,
+      "authId": "alibaba",
+      "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "models": [
+        {
+          "id": "qwen-plus",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "huggingface",
+      "label": "HuggingFace",
+      "needsKey": true,
+      "authId": "huggingface",
+      "baseURL": "https://router.huggingface.co/v1",
+      "models": [
+        {
+          "id": "meta-llama/Llama-3.3-70B-Instruct",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "openai",
+      "label": "OpenAI",
+      "needsKey": true,
+      "authId": "openai",
+      "baseURL": "https://api.openai.com/v1",
+      "models": [
+        {
+          "id": "gpt-4o-mini",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "zen",
+      "label": "Zen API",
+      "needsKey": true,
+      "authId": "zen",
+      "baseURL": "https://api.zen.dev/v1",
+      "models": [
+        {
+          "id": "zen-2.5-flash",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "fireworks",
+      "label": "Fireworks AI",
+      "needsKey": true,
+      "authId": "fireworks",
+      "baseURL": "https://api.fireworks.ai/v1",
+      "models": [
+        {
+          "id": "accounts/fireworks/models/llama-v3p3-70b-instruct",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "mistral",
+      "label": "Mistral AI",
+      "needsKey": true,
+      "authId": "mistral",
+      "baseURL": "https://api.mistral.ai/v1",
+      "models": [
+        {
+          "id": "mistral-large-latest",
+          "free": false
+        },
+        {
+          "id": "open-mixtral-8x22b",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "deepseek",
+      "label": "DeepSeek",
+      "needsKey": true,
+      "authId": "deepseek",
+      "baseURL": "https://api.deepseek.com/v1",
+      "models": [
+        {
+          "id": "deepseek-chat",
+          "free": false
+        },
+        {
+          "id": "deepseek-reasoner",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "google",
+      "label": "Google AI",
+      "needsKey": true,
+      "authId": "google",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta",
+      "models": [
+        {
+          "id": "gemini-2.0-flash",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "kilocode",
+      "label": "KiloCode",
+      "needsKey": true,
+      "authId": "kilocode",
+      "baseURL": "https://api.kilocode.ai/v1",
+      "models": [
+        {
+          "id": "Qwen2.5-72B-Instruct",
+          "free": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "name": "together",
+      "label": "Together (free)",
+      "needsKey": true,
+      "authId": "together",
+      "baseURL": "https://api.together.xyz/v1",
+      "models": [
+        {
+          "name": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+          "free": true
+        }
+      ],
+      "enabled": false
+    }
+  ]
+}

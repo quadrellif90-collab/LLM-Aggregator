@@ -242,7 +242,7 @@ function rebuildRegistry() {
     if (p.enabled === false) return;
     providers[p.name] = p;
     (p.models || []).forEach((m) => {
-      const id = typeof m === 'string' ? m : m.id;
+      const id = typeof m === 'string' ? m : (m.name || m.id);
       models[id] = {
         id,
         provider: p.name,
