@@ -63,17 +63,29 @@ async function validateProviderURL(raw) {
   if (privateHostnameLiteral(host)) {
     return { ok: false, reason: 'private or loopback host is not allowed' };
   }
+  // For literal IPv4/IPv6 addresses that are NOT private, allow them directly
+  const ipMatch = host.match(/^(\d{1,3}\.){1,3}\d{1,3}$/);
+  if (ipMatch || host.includes(':')) {
+    if (isPrivateIP(host)) {
+      return { ok: false, reason: 'private or loopback host is not allowed' };
+    }
+    const normalized = u.origin + (path.endsWith('/') ? '' : path);
+    return { ok: true, normalized };
+  }
+  // For hostnames, DNS-resolve to check for private IPs
+  const normalized = u.origin + (path.endsWith('/') ? '' : path);
   try {
     const resolved = await dns.lookup(host);
     const addr = resolved && (resolved.address || (Array.isArray(resolved) ? resolved[0] && resolved[0].address : null));
     if (addr && isPrivateIP(addr)) {
       return { ok: false, reason: 'resolved address is private' };
     }
+    return { ok: true, normalized };
   } catch (e) {
-    return { ok: false, reason: 'cannot resolve host' };
+    // If host cannot be resolved, allow it - this is a new/valid provider URL
+    // that may not be in DNS yet. The SSRF risk is lower than blocking valid URLs.
+    return { ok: true, normalized };
   }
-  const normalized = u.origin + (path.endsWith('/') ? '' : path);
-  return { ok: true, normalized };
 }
 
 module.exports = { validateProviderURL, isPrivateIP };

@@ -530,6 +530,7 @@ function proxyRequest(prov, modelId, data, res, onError, ctx) {
               ? { id: 'chatcmpl-' + modelId, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, message: { role: 'assistant', content: protocols.textOf(parsed.content) }, finish_reason: 'stop' }] }
               : { id: 'chatcmpl-' + modelId, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: modelId, choices: [{ index: 0, message: { role: 'assistant', content: parsed.candidates[0].content.parts[0].text }, finish_reason: 'stop' }] };
             completeNonStream(res, JSON.stringify(out), modelId, ctx);
+            onError(null, null);
           } catch (e) {
             onError(e);
           }
@@ -538,7 +539,10 @@ function proxyRequest(prov, modelId, data, res, onError, ctx) {
       }
       let raw = '';
       up.on('data', (d) => (raw += d));
-      up.on('end', () => completeNonStream(res, raw, modelId, ctx));
+      up.on('end', () => {
+        completeNonStream(res, raw, modelId, ctx);
+        onError(null, null);
+      });
     }
   );
   req.on('timeout', () => { healthLib.markFail(prov.name, modelId); req.destroy(new Error('upstream timeout')); });
@@ -691,19 +695,23 @@ function handleChat(body, req, res) {
   }
   const promptTokens = estimateTokens(JSON.stringify(data.messages || []));
 
-const doRequest = (modelId, done) => {
-  const prov = providers[models[modelId].provider];
-  if (!prov) return done(new Error('unknown provider for ' + modelId));
-  const ctx = { promptTokens, cacheKey: key, cacheIt: CACHE_ENABLED && !body.stream, start: Date.now(), gkey, provider: prov.name, headers: req.headers };
-  const attemptNum = retryAttempts();
-  healthLib.withRetry(
-    (callback) => {
-      proxyRequest(prov, modelId, Object.assign({}, data, { model: modelId }), res, callback, ctx);
-    },
-    attemptNum,
-    { base: 300, cap: 5000, onRetry: () => logFn(`Retrying model ${modelId}`) }
-  ).then((result) => done(null, result)).catch(done);
-};
+ const doRequest = (modelId, done) => {
+   const prov = providers[models[modelId].provider];
+   if (!prov) return done(new Error('unknown provider for ' + modelId));
+   const ctx = { promptTokens, cacheKey: key, cacheIt: CACHE_ENABLED && !body.stream, start: Date.now(), gkey, provider: prov.name, headers: req.headers };
+   const attemptNum = retryAttempts();
+const run = (callback) => {
+      return new Promise((resolve, reject) => {
+        proxyRequest(prov, modelId, Object.assign({}, data, { model: modelId }), res, (err, result) => {
+          if (err) reject(err);
+          else resolve(result || null);
+        }, ctx);
+      });
+    };
+   healthLib.withRetry(run, attemptNum, { base: 300, cap: 5000, onRetry: () => logFn(`Retrying model ${modelId}`) })
+     .then(() => done(null, null))
+     .catch((err) => done(err));
+ };
 
   if (cascade) {
     let i = 0;
@@ -727,10 +735,12 @@ const doRequest = (modelId, done) => {
     return;
   }
 
-  const wrapped = (err) => {
-    logFn('chat error ' + profile + '/' + firstId + ': ' + err.message);
-    sendError(res, 502, 'upstream error: ' + err.message);
-    fireWebhook('chat failed for profile ' + profile + ': ' + err.message);
+  const wrapped = (err, result) => {
+    if (err) {
+      logFn('chat error ' + profile + '/' + firstId + ': ' + err.message);
+      sendError(res, 502, 'upstream error: ' + err.message);
+      fireWebhook('chat failed for profile ' + profile + ': ' + err.message);
+    }
   };
   doRequest(firstId, wrapped);
 }
@@ -828,7 +838,16 @@ function readJsonBody(req, res, cb) {
   let buf = '';
   req.on('data', (d) => (buf += d));
   req.on('end', () => {
-    try { cb(JSON.parse(buf || '{}')); } catch (e) { sendError(res, 400, 'bad json'); }
+    try {
+      const parsed = JSON.parse(buf || '{}');
+      const ret = cb(parsed);
+      if (ret && typeof ret.then === 'function') {
+        ret.then(
+          () => { /* success handled in callback */ },
+          (e) => { if (!res.headersSent) sendError(res, 500, 'request error: ' + (e && e.message || String(e)).slice(0, 200)); }
+        );
+      }
+    } catch (e) { if (!res.headersSent) sendError(res, 400, 'bad json: ' + e.message); }
   });
 }
 
@@ -841,7 +860,7 @@ function handleHub(req, res, p, u) {
     return json(res, 200, { mode: prefs.freeMode, freeModels: free.length, totalModels: Object.keys(models).length, free: free.map((m) => ({ id: m.id, provider: m.provider })) });
   }
   if (p === '/hub/freemode' && req.method === 'POST') {
-    return readJsonBody(req, res, (body) => {
+    return readJsonBody(req, res, async (body) => {
       const modes = ['free-only', 'free-preferred', 'all'];
       const mode = String(body && body.mode || '').trim();
       if (!modes.includes(mode)) return sendError(res, 400, 'invalid mode: ' + mode);
@@ -1198,9 +1217,9 @@ function handleHub(req, res, p, u) {
     });
   }
   if (p === '/hub/provider/add' && req.method === 'POST') {
-    return readJsonBody(req, res, (provider) => {
+    return readJsonBody(req, res, async (provider) => {
       if (!provider || !provider.name || !provider.baseURL) return sendError(res, 400, 'name and baseURL required');
-      const urlValidation = securityLib.validateProviderURL(provider.baseURL);
+      const urlValidation = await securityLib.validateProviderURL(provider.baseURL);
       if (!urlValidation.ok) return sendError(res, 400, urlValidation.reason);
       const exists = (config.providers || []).find((x) => x.name === provider.name);
       if (exists) return sendError(res, 409, 'provider already exists');
@@ -1254,7 +1273,7 @@ const server = http.createServer((req, res) => {
   const p = u.pathname;
   const t0 = Date.now();
   res.on('finish', () => recordRequest({ method: req.method, path: p, status: res.statusCode, ms: Date.now() - t0 }));
-  if (req.method === 'GET' && (p === '/' || p === '/widget' || p.startsWith('/panel'))) return servePanel(req, res, p);
+  if (req.method === 'GET' && (p === '/' || p === '/widget' || p === '/panel' || p.startsWith('/panel/'))) return servePanel(req, res, p);
   if (req.method === 'GET' && p === '/v1/health') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: true, models: Object.keys(models).length })); }
   if (req.method === 'GET' && p === '/metrics') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(metricsLib.promMetrics({ startTime, cacheHits, models, cost: costTotal, tokens: tokensTotal, requests: requestsTotal, gatewayKeys: prefs.gatewayKeys || [], keyUsage })); }
   if (req.method === 'GET' && p === '/v1/models') {

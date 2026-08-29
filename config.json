@@ -326,6 +326,12 @@
         }
       ],
       "enabled": false
+    },
+    {
+      "enabled": true,
+      "models": [],
+      "name": "test-openai",
+      "baseURL": "https://api.openai.com/v1"
     }
   ]
 }

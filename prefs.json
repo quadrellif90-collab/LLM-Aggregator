@@ -91,5 +91,8 @@
       "llama3.1",
       "qwen2.5-coder"
     ]
-  }
+  },
+  "gatewayKeys": [],
+  "keylimits": {},
+  "freeMode": "free-only"
 }
