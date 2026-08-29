@@ -324,14 +324,6 @@ class FreeHubUI {
     });
   }
 
-  async renderFreeModeStatus() {
-    const sel = document.getElementById('freeModeSel');
-    const st = document.getElementById('freeModeStatus');
-    if (!this.state.freemode) { st.textContent = '–'; return; }
-    sel.value = this.state.freemode.mode || 'free-preferred';
-    st.textContent = `${this.state.freemode.freeModels}/${this.state.freemode.totalModels} modelli free · ${this.state.freemode.mode || '–'}`;
-  }
-
   async sendChat() {
     const promptEl = document.getElementById('prompt');
     const out = document.getElementById('out');

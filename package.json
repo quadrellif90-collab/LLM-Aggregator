@@ -8,11 +8,15 @@
     "server": "node server/index.js",
     "start": "node server/index.js",
     "tauri": "tauri",
-    "lint": "eslint server"
+    "lint": "eslint server",
+    "test": "node --test test/server.test.js",
+    "build:node": "node -e \"const pkg=require('pkg');pkg.parse(process.argv).then(c=>c.forEach(f=>require('fs').copyFileSync(f.src,f.dest)))\" -- .",
+    "dist": "npm run lint && npm run test && npm run build:node"
   },
   "dependencies": {},
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "pkg": "^5.8"
   },
   "engines": {
     "node": ">=18"

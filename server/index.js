@@ -26,6 +26,7 @@ const CONFIG_FILE = path.join(DIR, 'config.json');
 const AUTH_FILE = path.join(DIR, 'auth.json');
 const PREFS_FILE = path.join(DIR, 'prefs.json');
 const PRICING_FILE = path.join(DIR, 'pricing.json');
+const HEALTH_FILE = path.join(DIR, 'health-state.json');
 const LOG_FILE = path.join(os.tmpdir(), 'llm-aggregator.log');
 const CACHE_ENABLED = (process.env.AGG_CACHE || '1') !== '0';
 const UPSTREAM_TIMEOUT_MS = 15000;
@@ -54,16 +55,16 @@ const CIRCUIT_OPEN_COOLDOWN_CAP_MS = 600000; // 10 minutes
 const CIRCUIT_OPEN_COOLDOWN_INC_FACTOR = 2; // Exponential backoff
 
 function markFail(providerName, modelId, retryAfterMs = 0) {
-  const key = modelId || providerName; // Use modelId if available, else providerName
+  const key = modelId || providerName;
   const now = Date.now();
   health[key] = health[key] || { status: 'ok', fails: 0, lastFail: 0, cooldownUntil: 0, latencyAvg: 0, success: 0 };
   health[key].fails++;
   health[key].lastFail = now;
   health[key].status = health[key].fails >= UPSTREAM_MAX_FAILURES ? 'down' : 'degraded';
-  
-  let cooldown = (retryAfterMs || (CIRCUIT_OPEN_COOLDOWN_BASE_MS * Math.pow(CIRCUIT_OPEN_COOLDOWN_INC_FACTOR, Math.min(health[key].fails - 1, 5)))); // Cap exponential backoff
+  let cooldown = (retryAfterMs || (CIRCUIT_OPEN_COOLDOWN_BASE_MS * Math.pow(CIRCUIT_OPEN_COOLDOWN_INC_FACTOR, Math.min(health[key].fails - 1, 5))));
   health[key].cooldownUntil = now + Math.min(cooldown, CIRCUIT_OPEN_COOLDOWN_CAP_MS);
   logFn(`Provider '${key}' marked as ${health[key].status} (fails: ${health[key].fails}, cooldown: ${health[key].cooldownUntil})`);
+  persistHealthState();
 }
 
 function markOk(providerName, modelId, latencyMs) {
@@ -72,10 +73,10 @@ function markOk(providerName, modelId, latencyMs) {
   health[key].status = 'ok';
   health[key].fails = 0;
   health[key].cooldownUntil = 0;
-  // EWMA for latency: new = alpha * latencyMs + (1 - alpha) * old_avg
   const alpha = 0.2;
   health[key].latencyAvg = alpha * latencyMs + (1 - alpha) * health[key].latencyAvg;
   health[key].success++;
+  persistHealthState();
 }
 
 function isCircuitOpen(providerName, modelId) {
@@ -102,6 +103,28 @@ let startTime = Date.now();
 
 function logFn(msg) {
   try { fs.appendFileSync(LOG_FILE, new Date().toISOString() + ' ' + msg + '\n'); } catch (e) {}
+}
+
+function persistHealthState() {
+  try {
+    const snapshot = {};
+    for (const [k, v] of Object.entries(health)) {
+      snapshot[k] = { status: v.status, fails: v.fails, lastFail: v.lastFail, cooldownUntil: v.cooldownUntil, latencyAvg: v.latencyAvg, success: v.success };
+    }
+    fs.writeFile(HEALTH_FILE, JSON.stringify(snapshot), () => {});
+  } catch (e) {}
+}
+
+function restoreHealthState() {
+  try {
+    const raw = fs.readFileSync(HEALTH_FILE, 'utf8');
+    const snap = JSON.parse(raw);
+    const now = Date.now();
+    for (const [k, v] of Object.entries(snap)) {
+      if (v.cooldownUntil && v.cooldownUntil > now) continue;
+      health[k] = { status: 'ok', fails: 0, lastFail: 0, cooldownUntil: 0, latencyAvg: v.latencyAvg || 0, success: v.success || 0 };
+    }
+  } catch (e) {}
 }
 
 function normalizePrefs() {
@@ -135,6 +158,13 @@ function settingsCfg() {
     cacheTtlMs: num('cacheTtlMs', 600000),
     tokenSet: !!(process.env.AGG_TOKEN || process.env.MODELHUB_TOKEN || prefs.controlToken)
   };
+}
+
+function retryAttempts() {
+  const s = prefs.settings || {};
+  const num = (k, d) => (Number.isFinite(s[k]) ? s[k] : d);
+  // retryAttempts setting, default 2
+  return num('retryAttempts', 2);
 }
 
 function enhancerCfg() {
@@ -661,12 +691,19 @@ function handleChat(body, req, res) {
   }
   const promptTokens = estimateTokens(JSON.stringify(data.messages || []));
 
-  const doRequest = (modelId, done) => {
-    const prov = providers[models[modelId].provider];
-    if (!prov) return done(new Error('unknown provider for ' + modelId));
-    const ctx = { promptTokens, cacheKey: key, cacheIt: CACHE_ENABLED && !body.stream, start: Date.now(), gkey, provider: prov.name, headers: req.headers };
-    proxyRequest(prov, modelId, Object.assign({}, data, { model: modelId }), res, done, ctx);
-  };
+const doRequest = (modelId, done) => {
+  const prov = providers[models[modelId].provider];
+  if (!prov) return done(new Error('unknown provider for ' + modelId));
+  const ctx = { promptTokens, cacheKey: key, cacheIt: CACHE_ENABLED && !body.stream, start: Date.now(), gkey, provider: prov.name, headers: req.headers };
+  const attemptNum = retryAttempts();
+  healthLib.withRetry(
+    (callback) => {
+      proxyRequest(prov, modelId, Object.assign({}, data, { model: modelId }), res, callback, ctx);
+    },
+    attemptNum,
+    { base: 300, cap: 5000, onRetry: () => logFn(`Retrying model ${modelId}`) }
+  ).then((result) => done(null, result)).catch(done);
+};
 
   if (cascade) {
     let i = 0;
@@ -768,7 +805,9 @@ function requireToken(req, res) {
 }
 
 function servePanel(req, res, urlPath) {
-  const rel = urlPath === '/' ? '/panel/index.html' : urlPath;
+  let rel = urlPath;
+  if (urlPath === '/') rel = '/panel/index.html';
+  if (urlPath === '/widget') rel = '/panel/widget.html';
   const file = path.join(APP_ROOT, rel);
   const root = APP_ROOT;
   if (!file.startsWith(root)) return sendError(res, 403, 'forbidden');
@@ -1161,6 +1200,8 @@ function handleHub(req, res, p, u) {
   if (p === '/hub/provider/add' && req.method === 'POST') {
     return readJsonBody(req, res, (provider) => {
       if (!provider || !provider.name || !provider.baseURL) return sendError(res, 400, 'name and baseURL required');
+      const urlValidation = securityLib.validateProviderURL(provider.baseURL);
+      if (!urlValidation.ok) return sendError(res, 400, urlValidation.reason);
       const exists = (config.providers || []).find((x) => x.name === provider.name);
       if (exists) return sendError(res, 409, 'provider already exists');
       config.providers.push(Object.assign({ enabled: true, models: [] }, provider));
@@ -1213,7 +1254,7 @@ const server = http.createServer((req, res) => {
   const p = u.pathname;
   const t0 = Date.now();
   res.on('finish', () => recordRequest({ method: req.method, path: p, status: res.statusCode, ms: Date.now() - t0 }));
-  if (req.method === 'GET' && (p === '/' || p.startsWith('/panel'))) return servePanel(req, res, p);
+  if (req.method === 'GET' && (p === '/' || p === '/widget' || p.startsWith('/panel'))) return servePanel(req, res, p);
   if (req.method === 'GET' && p === '/v1/health') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ ok: true, models: Object.keys(models).length })); }
   if (req.method === 'GET' && p === '/metrics') { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end(metricsLib.promMetrics({ startTime, cacheHits, models, cost: costTotal, tokens: tokensTotal, requests: requestsTotal, gatewayKeys: prefs.gatewayKeys || [], keyUsage })); }
   if (req.method === 'GET' && p === '/v1/models') {
@@ -1244,6 +1285,7 @@ const server = http.createServer((req, res) => {
 
 function start() {
   authStore = storage.readJSON(AUTH_FILE, { entries: [] });
+  restoreHealthState();
   normalizePrefs();
   rebuildRegistry();
   server.on('error', (err) => {
