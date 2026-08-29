@@ -6,8 +6,90 @@
     "auto-fast": "autoroute",
     "free-pool": "autoroute"
   },
-  "enhancer": { "enabled": true, "maxChars": 4000, "timeoutMs": 12000 },
-  "features": { "cache": true, "autoProbe": true },
+  "enhancer": {
+    "enabled": true,
+    "maxChars": 4000,
+    "timeoutMs": 12000
+  },
+  "features": {
+    "cache": true,
+    "autoProbe": true
+  },
   "enabled": {},
-  "profiles": {}
+  "profiles": {
+    "auto": [
+      "gpt-4o",
+      "gpt-4o-mini",
+      "o1-mini",
+      "gpt-4-turbo",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022",
+      "claude-3-opus-20240229",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash",
+      "llama-3.1-70b-versatile",
+      "mixtral-8x7b-32768",
+      "deepseek-chat",
+      "deepseek-reasoner",
+      "llama3.1",
+      "qwen2.5-coder"
+    ],
+    "auto-code": [
+      "qwen2.5-coder",
+      "gpt-4o",
+      "gpt-4o-mini",
+      "o1-mini",
+      "gpt-4-turbo",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022",
+      "claude-3-opus-20240229",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash",
+      "llama-3.1-70b-versatile",
+      "mixtral-8x7b-32768",
+      "deepseek-chat",
+      "deepseek-reasoner",
+      "llama3.1"
+    ],
+    "auto-reasoning": [
+      "o1-mini",
+      "deepseek-reasoner",
+      "gpt-4o",
+      "gpt-4o-mini",
+      "gpt-4-turbo",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022",
+      "claude-3-opus-20240229",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash",
+      "llama-3.1-70b-versatile",
+      "mixtral-8x7b-32768",
+      "deepseek-chat",
+      "llama3.1",
+      "qwen2.5-coder"
+    ],
+    "auto-fast": [
+      "gpt-4o-mini",
+      "o1-mini",
+      "gpt-4-turbo",
+      "claude-3-5-haiku-20241022",
+      "gemini-1.5-pro",
+      "gemini-1.5-flash",
+      "gpt-4o",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-opus-20240229",
+      "llama-3.1-70b-versatile",
+      "mixtral-8x7b-32768",
+      "deepseek-chat",
+      "deepseek-reasoner",
+      "llama3.1",
+      "qwen2.5-coder"
+    ],
+    "free-pool": [
+      "llama-3.1-70b-versatile",
+      "mixtral-8x7b-32768",
+      "llama3.1",
+      "qwen2.5-coder"
+    ]
+  }
 }

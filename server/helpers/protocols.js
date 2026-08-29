@@ -72,10 +72,60 @@ function openAIToGemini(data, finishReason) {
   return { candidates: [cand] };
 }
 
+/** Build a single OpenAI chat.completion.chunk object. */
+function openAIChunk(model, content, finishReason) {
+  const delta = {};
+  if (content) delta.content = content;
+  if (finishReason === null) delta.role = 'assistant';
+  return {
+    id: 'chatcmpl-' + model,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        delta: content || finishReason ? delta : {},
+        finish_reason: finishReason || null,
+      },
+    ],
+  };
+}
+
+/** Convert one Anthropic SSE data object into an OpenAI chunk (or null to skip). */
+function anthropicStreamChunkToOpenAI(data, model) {
+  if (!data || typeof data !== 'object') return null;
+  if (data.type === 'content_block_delta' && data.delta && data.delta.type === 'text_delta') {
+    return openAIChunk(model, data.delta.text || '', null);
+  }
+  if (data.type === 'message_delta') {
+    const fr = (data.delta && data.delta.stop_reason) || 'stop';
+    return openAIChunk(model, '', fr);
+  }
+  return null;
+}
+
+/** Convert one Gemini SSE data object into an OpenAI chunk (or null to skip). */
+function geminiStreamChunkToOpenAI(data, model) {
+  if (!data || typeof data !== 'object') return null;
+  const cand = data.candidates && data.candidates[0];
+  const parts = (cand && cand.content && cand.content.parts) || [];
+  const text = parts.map((p) => p.text || '').join('');
+  let fr = null;
+  if (cand && cand.finishReason && cand.finishReason !== 'FINISH_REASON_UNSPECIFIED' && cand.finishReason !== 'STOP_UNSPECIFIED') {
+    fr = cand.finishReason === 'MAX_TOKENS' ? 'length' : 'stop';
+  }
+  if (!text && !fr) return null;
+  return openAIChunk(model, text, fr);
+}
+
 module.exports = {
   textOf,
   anthropicToOpenAI,
   openAIToAnthropic,
   geminiGenerateToOpenAI,
   openAIToGemini,
+  openAIChunk,
+  anthropicStreamChunkToOpenAI,
+  geminiStreamChunkToOpenAI,
 };

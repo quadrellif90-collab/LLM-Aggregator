@@ -14,6 +14,15 @@ function promMetrics(state) {
   out += '# HELP aggregator_models_total Number of known models.\n';
   out += '# TYPE aggregator_models_total gauge\n';
   out += 'aggregator_models_total ' + Object.keys(models).length + '\n';
+  out += '# HELP llm_aggregator_requests_total Total chat/embedding requests handled.\n';
+  out += '# TYPE llm_aggregator_requests_total counter\n';
+  out += 'llm_aggregator_requests_total ' + (state.requests || 0) + '\n';
+  out += '# HELP llm_aggregator_tokens_total Estimated total tokens processed.\n';
+  out += '# TYPE llm_aggregator_tokens_total counter\n';
+  out += 'llm_aggregator_tokens_total ' + (state.tokens || 0) + '\n';
+  out += '# HELP llm_aggregator_cost_total Estimated total cost in currency units.\n';
+  out += '# TYPE llm_aggregator_cost_total counter\n';
+  out += 'llm_aggregator_cost_total ' + (state.cost || 0).toFixed(6) + '\n';
   return out;
 }
 

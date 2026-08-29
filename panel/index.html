@@ -11,28 +11,90 @@
     <h1>LLM Aggregator</h1>
     <span id="status" class="badge">…</span>
   </header>
+  <nav id="tabs">
+    <button class="tab active" data-tab="chat">Chat</button>
+    <button class="tab" data-tab="models">Models</button>
+    <button class="tab" data-tab="profiles">Profiles</button>
+    <button class="tab" data-tab="providers">Providers</button>
+    <button class="tab" data-tab="keys">API Keys</button>
+    <button class="tab" data-tab="features">Features</button>
+    <button class="tab" data-tab="experiments">Experiments</button>
+    <button class="tab" data-tab="webhooks">Webhooks</button>
+    <button class="tab" data-tab="usage">Usage / Cost</button>
+  </nav>
   <main>
-    <section class="card">
-      <h2>Profiles</h2>
-      <ul id="profiles"></ul>
-    </section>
-    <section class="card">
-      <h2>Providers &amp; Keys</h2>
-      <ul id="providers"></ul>
-      <form id="keyForm">
-        <input id="keyName" placeholder="provider authId (e.g. openai)" />
-        <input id="keyValue" type="password" placeholder="API key" />
-        <button type="submit">Save key</button>
-      </form>
-    </section>
-    <section class="card">
-      <h2>Try it</h2>
+    <section class="card tab-panel active" id="tab-chat">
+      <h2>Chat</h2>
       <textarea id="prompt" placeholder="Ask anything…"></textarea>
       <div class="row">
         <select id="profileSel"></select>
+        <label><input type="checkbox" id="streamChk" /> stream</label>
         <button id="sendBtn">Send</button>
       </div>
-      <pre id="out"></pre>
+      <pre id="out">—</pre>
+    </section>
+
+    <section class="card tab-panel" id="tab-models">
+      <h2>Models</h2>
+      <div id="modelsList" class="list">…</div>
+    </section>
+
+    <section class="card tab-panel" id="tab-profiles">
+      <h2>Profiles</h2>
+      <div id="profilesList" class="list">…</div>
+    </section>
+
+    <section class="card tab-panel" id="tab-providers">
+      <h2>Providers</h2>
+      <div id="providersList" class="list">…</div>
+      <h3>Add provider</h3>
+      <input id="provName" placeholder="name (e.g. openrouter)" />
+      <input id="provUrl" placeholder="baseURL (https://…/v1)" />
+      <input id="provModels" placeholder="models comma separated (optional)" />
+      <label><input type="checkbox" id="provKey" checked /> needs key</label>
+      <button id="provAdd">Add</button>
+      <h3>Reorder</h3>
+      <input id="provOrder" placeholder="comma separated names" />
+      <button id="provReorder">Apply order</button>
+    </section>
+
+    <section class="card tab-panel" id="tab-keys">
+      <h2>API Keys</h2>
+      <form id="keyForm">
+        <input id="keyName" placeholder="authId (e.g. openai)" />
+        <input id="keyValue" type="password" placeholder="API key" />
+        <button type="submit">Save key</button>
+      </form>
+      <div id="keyList" class="list">…</div>
+    </section>
+
+    <section class="card tab-panel" id="tab-features">
+      <h2>Features</h2>
+      <label><input type="checkbox" id="featCache" /> Cache</label>
+      <label><input type="checkbox" id="featEnhancer" /> Prompt enhancer</label>
+      <button id="featSave">Save</button>
+      <button id="cacheClear">Clear cache</button>
+      <div id="featStatus" class="list"></div>
+    </section>
+
+    <section class="card tab-panel" id="tab-experiments">
+      <h2>Experiments</h2>
+      <input id="expName" placeholder="experiment name (= profile)" />
+      <input id="expVariants" placeholder="model ids comma separated" />
+      <button id="expAdd">Create</button>
+      <div id="expList" class="list">…</div>
+    </section>
+
+    <section class="card tab-panel" id="tab-webhooks">
+      <h2>Webhooks</h2>
+      <input id="hookUrl" placeholder="https://… (alert on upstream errors)" />
+      <button id="hookSave">Save</button>
+      <div id="hookStatus" class="list"></div>
+    </section>
+
+    <section class="card tab-panel" id="tab-usage">
+      <h2>Usage / Cost</h2>
+      <div id="usageView" class="list">…</div>
     </section>
   </main>
   <script src="/panel/app.js"></script>

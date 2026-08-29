@@ -2,6 +2,9 @@ node_modules
 .env
 *.log
 llm-aggregator.exe
+icon.png
+*.err
+*.bak
 dist/
 build/
 .idea/
