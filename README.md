@@ -3,7 +3,7 @@
 Un gateway locale **OpenAI-compatible** che unifica decine di provider LLM dietro un'unica API, con autorouting, failover, cache e una control panel. È la rivisitazione modulare e libera da dipendenze di `modelhub-ai-gateway`.
 
 ## Funzionalità
-- Endpoint OpenAI compatibile su `http://127.0.0.1:8787/v1` (`chat/completions`, `embeddings`, `models`).
+- Endpoint OpenAI compatibile su `http://127.0.0.1:9090/v1` (`chat/completions`, `embeddings`, `models`).
 - **Autorouting**: sceglie il modello giusto in base al profilo e al contenuto del prompt (code / reasoning / fast / free-pool).
 - **Failover** su più provider con timeout configurabili.
 - **Cache** delle risposte (SHA-256 key) per risparmiare token e latenza.
@@ -14,11 +14,11 @@ Un gateway locale **OpenAI-compatible** che unifica decine di provider LLM dietr
 
 ## Avvio
 ```bash
-npm run server          # avvia il gateway su :8787
+npm run server          # avvia il gateway su :9090
 # oppure con Bun
 bun server/index.js
 ```
-Apri `http://127.0.0.1:8787/` nella control panel.
+Apri `http://127.0.0.1:9090/` nella control panel.
 
 ## Shell desktop (Tauri)
 ```bash
@@ -34,7 +34,7 @@ npm run tauri build     # build nativa (richiede la toolchain Rust)
 - `auth.json` — chiavi API, crittografate con **AES-256-GCM** legate alla macchina.
 
 ## Variabili d'ambiente
-- `AGG_PORT` / `MODELHUB_PORT` — porta (default `8787`).
+- `AGG_PORT` / `MODELHUB_PORT` — porta (default `9090`).
 - `AGG_TOKEN` / `MODELHUB_TOKEN` — token per la `/hub` API.
 - `AGG_DIR` / `MODELHUB_DIR` — cartella dei dati.
 - `AGG_CACHE` — `0` per disabilitare la cache.
