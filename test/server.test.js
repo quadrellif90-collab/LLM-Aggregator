@@ -196,6 +196,51 @@ test('hub/keys bulk-imports provider keys and sets limits', async () => {
   assert.deepStrictEqual(JSON.parse(lim.body).limit, { tokens: 100, spend: 10 });
 });
 
+test('hub/freemode GET returns mode + free models', async () => {
+  const r = await get('/hub/freemode');
+  assert.strictEqual(r.status, 200);
+  const j = JSON.parse(r.body);
+  assert.ok(['free-only', 'free-preferred', 'all'].includes(j.mode));
+  assert.ok(Number.isInteger(j.freeModels));
+  assert.ok(Number.isInteger(j.totalModels));
+  assert.ok(Array.isArray(j.free));
+});
+
+test('hub/freemode POST stores and persists the mode', async () => {
+  const set = await post('/hub/freemode', { mode: 'free-only' });
+  assert.strictEqual(set.status, 200);
+  assert.strictEqual(JSON.parse(set.body).freeMode, 'free-only');
+
+  const get2 = await get('/hub/freemode');
+  assert.strictEqual(JSON.parse(get2.body).mode, 'free-only');
+
+  const restore = await post('/hub/freemode', { mode: 'free-preferred' });
+  assert.strictEqual(restore.status, 200);
+  assert.strictEqual(JSON.parse(restore.body).freeMode, 'free-preferred');
+});
+
+test('hub/sync GET returns gateway keys + auth store names', async () => {
+  const r = await get('/hub/sync');
+  assert.strictEqual(r.status, 200);
+  const j = JSON.parse(r.body);
+  assert.ok(Array.isArray(j.gatewayKeys));
+  assert.ok(Array.isArray(j.auth));
+});
+
+test('hub/sync POST stores gateway keys and returns count', async () => {
+  const set = await post('/hub/sync', { keys: ['sync-1', 'sync-2'] });
+  assert.strictEqual(set.status, 200);
+  assert.strictEqual(JSON.parse(set.body).count, 2);
+
+  const get2 = await get('/hub/sync');
+  assert.deepStrictEqual(JSON.parse(get2.body).gatewayKeys, ['sync-1', 'sync-2']);
+
+  const clear = await post('/hub/sync', { keys: [] });
+  assert.strictEqual(clear.status, 400);
+  const after = await get('/hub/sync');
+  assert.deepStrictEqual(JSON.parse(after.body).gatewayKeys, ['sync-1', 'sync-2']);
+});
+
 test('gateway keys gate chat completions', async () => {
   const set = await post('/hub/gateway-keys', { keys: ['sk-test'] });
   assert.strictEqual(set.status, 200);

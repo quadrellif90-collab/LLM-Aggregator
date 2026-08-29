@@ -3,100 +3,206 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>LLM Aggregator</title>
+  <title>FreeHub</title>
   <link rel="stylesheet" href="/panel/styles.css" />
 </head>
 <body>
-  <header>
-    <h1>LLM Aggregator</h1>
-    <span id="status" class="badge">…</span>
+  <header class="topbar">
+    <div class="brand">FreeHub <span class="sub">multi-provider gateway</span></div>
+    <div id="costBadge" class="cost-badge" title="Spesa di oggi">–</div>
+    <div id="lastModel" class="lastmodel" title="Ultimo modello risolto">–</div>
+    <div class="status">
+      <span id="serverDot" class="dot off"></span>
+      <span id="serverText">server…</span>
+    </div>
+    <div class="actions">
+      <button id="exportBtn" class="btn" title="Esporta config">Export</button>
+      <button id="themeBtn" class="btn" title="Cambia tema">Tema</button>
+      <button id="probeAll" class="btn" title="Verifica modelli attivi">Probe</button>
+      <button id="refresh" class="btn">Aggiorna</button>
+    </div>
   </header>
-  <nav id="tabs">
-    <button class="tab active" data-tab="chat">Chat</button>
-    <button class="tab" data-tab="models">Models</button>
-    <button class="tab" data-tab="profiles">Profiles</button>
-    <button class="tab" data-tab="providers">Providers</button>
-    <button class="tab" data-tab="keys">API Keys</button>
-    <button class="tab" data-tab="features">Features</button>
-    <button class="tab" data-tab="experiments">Experiments</button>
-    <button class="tab" data-tab="webhooks">Webhooks</button>
-    <button class="tab" data-tab="usage">Usage / Cost</button>
-  </nav>
-  <main>
-    <section class="card tab-panel active" id="tab-chat">
-      <h2>Chat</h2>
-      <textarea id="prompt" placeholder="Ask anything…"></textarea>
-      <div class="row">
-        <select id="profileSel"></select>
-        <label><input type="checkbox" id="streamChk" /> stream</label>
-        <button id="sendBtn">Send</button>
+
+  <main class="layout">
+    <section class="col providers">
+      <h2>Provider &amp; modelli <span id="modelCount" class="count"></span></h2>
+      <div class="ptoolbar">
+        <input id="pSearch" type="search" placeholder="cerca provider o modello…" />
+        <select id="pFilter">
+          <option value="all">tutti</option>
+          <option value="enabled">attivi</option>
+          <option value="disabled">disattivi</option>
+          <option value="free">solo free</option>
+        </select>
+        <select id="pSort">
+          <option value="default">ordine default</option>
+          <option value="name">nome A→Z</option>
+          <option value="health">salute</option>
+          <option value="usage">più usati</option>
+        </select>
+        <label class="check compact"><input id="pCompact" type="checkbox" /> compatta</label>
       </div>
-      <pre id="out">—</pre>
+      <div id="providers"></div>
     </section>
 
-    <section class="card tab-panel" id="tab-models">
-      <h2>Models</h2>
-      <div id="modelsList" class="list">…</div>
-    </section>
+    <aside class="col side">
+      <section class="panel">
+        <h2>Chat</h2>
+        <textarea id="prompt" placeholder="Ask anything…"></textarea>
+        <div class="row">
+          <select id="profileSel"></select>
+          <label class="check"><input type="checkbox" id="streamChk" /> stream</label>
+          <button id="sendBtn" class="btn primary">Send</button>
+        </div>
+        <pre id="out">—</pre>
+      </section>
 
-    <section class="card tab-panel" id="tab-profiles">
-      <h2>Profiles</h2>
-      <div id="profilesList" class="list">…</div>
-    </section>
+      <section class="panel">
+        <h2>Profili &amp; ordinamento</h2>
+        <div class="row">
+          <select id="profileSelect"></select>
+        </div>
+        <div class="row">
+          <select id="strategySelect" title="Strategia di routing"></select>
+        </div>
+        <p class="hint">Strategie: order · cheapest · fastest · least-used · random · cascade.</p>
+        <div class="row">
+          <button id="profileNew" class="btn">+ Profilo</button>
+        </div>
+        <ol id="profileList" class="profile-list"></ol>
+        <button id="saveOrder" class="btn primary">Salva ordine</button>
+        <button id="profileDel" class="btn danger">Elimina</button>
+      </section>
 
-    <section class="card tab-panel" id="tab-providers">
-      <h2>Providers</h2>
-      <div id="providersList" class="list">…</div>
-      <h3>Add provider</h3>
-      <input id="provName" placeholder="name (e.g. openrouter)" />
-      <input id="provUrl" placeholder="baseURL (https://…/v1)" />
-      <input id="provModels" placeholder="models comma separated (optional)" />
-      <label><input type="checkbox" id="provKey" checked /> needs key</label>
-      <button id="provAdd">Add</button>
-      <h3>Reorder</h3>
-      <input id="provOrder" placeholder="comma separated names" />
-      <button id="provReorder">Apply order</button>
-    </section>
+      <section class="panel">
+        <h2>FreeMode <span class="count" id="freeModeInfo"></span></h2>
+        <select id="freeModeSel">
+          <option value="free-only">solo free</option>
+          <option value="free-preferred">free preferito</option>
+          <option value="all">tutti</option>
+        </select>
+        <button id="freeModeSave" class="btn primary">Salva</button>
+        <p class="hint" id="freeModeStatus">–</p>
+        <h3>Sincronizzazione chiavi gateway</h3>
+        <div class="row">
+          <select id="syncModeSel">
+            <option value="auto">auto (usa auth store)</option>
+            <option value="manual">manuale (sostituisce)</option>
+          </select>
+          <button id="syncKeys" class="btn">Sync chiavi</button>
+        </div>
+        <p class="hint" id="syncStatus">–</p>
+      </section>
 
-    <section class="card tab-panel" id="tab-keys">
-      <h2>API Keys</h2>
-      <form id="keyForm">
-        <input id="keyName" placeholder="authId (e.g. openai)" />
-        <input id="keyValue" type="password" placeholder="API key" />
-        <button type="submit">Save key</button>
-      </form>
-      <div id="keyList" class="list">…</div>
-    </section>
+      <section class="panel">
+        <h2>Prezzi ($/Mtok)</h2>
+        <div id="pricingList" class="pricing-list"></div>
+      </section>
 
-    <section class="card tab-panel" id="tab-features">
-      <h2>Features</h2>
-      <label><input type="checkbox" id="featCache" /> Cache</label>
-      <label><input type="checkbox" id="featEnhancer" /> Prompt enhancer</label>
-      <button id="featSave">Save</button>
-      <button id="cacheClear">Clear cache</button>
-      <div id="featStatus" class="list"></div>
-    </section>
+      <section class="panel">
+        <h2>Import massivo chiavi provider</h2>
+        <p class="hint">Incolla JSON <code>{ "provider": "key", ... }</code>.</p>
+        <textarea id="bulkKeys" rows="6" placeholder='{ "openai": "sk-...", "groq": "gsk_..." }'></textarea>
+        <div class="row">
+          <button id="bulkImport" class="btn primary">Importa chiavi</button>
+          <span id="bulkMsg" class="msg"></span>
+        </div>
+      </section>
 
-    <section class="card tab-panel" id="tab-experiments">
-      <h2>Experiments</h2>
-      <input id="expName" placeholder="experiment name (= profile)" />
-      <input id="expVariants" placeholder="model ids comma separated" />
-      <button id="expAdd">Create</button>
-      <div id="expList" class="list">…</div>
-    </section>
+      <section class="panel">
+        <h2>Chiavi gateway</h2>
+        <p class="hint">Se definite, le API richiedono <code>Authorization: Bearer &lt;key&gt;</code>.</p>
+        <textarea id="gwKeys" placeholder="mh-key-1&#10;mh-key-2"></textarea>
+        <button id="gwSave" class="btn primary">Salva chiavi</button>
+      </section>
 
-    <section class="card tab-panel" id="tab-webhooks">
-      <h2>Webhooks</h2>
-      <input id="hookUrl" placeholder="https://… (alert on upstream errors)" />
-      <button id="hookSave">Save</button>
-      <div id="hookStatus" class="list"></div>
-    </section>
+      <section class="panel">
+        <h2>Prompt enhancer</h2>
+        <div class="row">
+          <select id="enhModel"></select>
+        </div>
+        <div class="row">
+          <label class="check">max caratteri <input id="enhMaxChars" type="number" min="200" max="20000" step="100" style="width:70px" value="4000" /></label>
+          <label class="check">timeout ms <input id="enhTimeout" type="number" min="3000" max="60000" step="500" style="width:70px" value="10000" /></label>
+        </div>
+        <p class="hint">Migliora automaticamente l'ultimo messaggio utente prima del routing.</p>
+        <label class="check"><input id="plugConcise" type="checkbox" /> conciso</label>
+        <label class="check"><input id="plugEnglish" type="checkbox" /> inglese</label>
+        <label class="check"><input id="plugCode" type="checkbox" /> code-pro</label>
+        <button id="plugSave" class="btn primary">Salva plugin</button>
+      </section>
 
-    <section class="card tab-panel" id="tab-usage">
-      <h2>Usage / Cost</h2>
-      <div id="usageView" class="list">…</div>
-    </section>
+      <section class="panel">
+        <h2>Impostazioni</h2>
+        <div class="row"><label class="check">verifica ogni <input id="setVerifyMin" type="number" min="1" max="1440" style="width:55px" /> min</label></div>
+        <div class="row"><label class="check">top K <input id="setTopK" type="number" min="3" max="50" style="width:45px" /></label></div>
+        <div class="row"><label class="check">budget failover <input id="setFailoverSec" type="number" min="5" max="600" style="width:55px" /> s</label></div>
+        <div class="row"><label class="check">cache TTL <input id="setCacheMin" type="number" min="1" max="1440" style="width:55px" /> min</label></div>
+        <button id="settingsSave" class="btn primary">Salva impostazioni</button>
+        <p class="hint" id="setInfo"></p>
+        <button id="tokenRegen" class="btn danger">Rigenera token controllo</button>
+      </section>
+
+      <section class="panel">
+        <h2>Aggiungi provider</h2>
+        <div class="form">
+          <input id="np_name" placeholder="nome (es. openai)" />
+          <input id="np_label" placeholder="etichetta" />
+          <input id="np_base" placeholder="baseURL (https://…/v1)" />
+          <label class="check"><input id="np_key" type="checkbox" checked /> richiede API key</label>
+          <textarea id="np_models" placeholder="modelli, uno per riga: nome|free&#10;vuoto = auto-discovery"></textarea>
+          <button id="np_add" class="btn primary">Aggiungi (+discovery)</button>
+          <button id="scanBtn" class="btn">Scansiona cataloghi</button>
+          <div id="scanOut" class="msg"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Funzionalità</h2>
+        <label class="check"><input id="featEnhancer" type="checkbox" /> prompt enhancer</label>
+        <label class="check"><input id="featCache" type="checkbox" /> cache risposte</label>
+        <label class="check"><input id="featProbe" type="checkbox" /> probe automatico</label>
+        <div id="cacheInfo" class="hint">–</div>
+        <button id="cacheClear" class="btn">Svuota cache</button>
+      </section>
+
+      <section class="panel">
+        <h2>Configurazione avanzata</h2>
+        <h3>Quote per chiave gateway</h3>
+        <div class="row"><label class="check">chiave <select id="klKey"></select></label></div>
+        <div class="row"><label class="check">limite token/giorno <input id="klTokens" type="number" min="0" step="1000" style="width:90px" placeholder="0=illimitato" /></label></div>
+        <div class="row"><label class="check">limite spesa/giorno $ <input id="klSpend" type="number" min="0" step="0.01" style="width:80px" placeholder="0=illimitato" /></label></div>
+        <button id="klSave" class="btn primary">Salva quota</button>
+        <p class="hint" id="klInfo"></p>
+        <h3>Esperimenti A/B</h3>
+        <div class="row"><label class="check"><input type="checkbox" id="expOn" /> abilita routing A/B</label></div>
+        <div class="row"><label class="check">profilo candidato <input id="expProfile" type="text" style="width:120px" placeholder="auto-code" /></label></div>
+        <div class="row"><label class="check">% traffico <input id="expSplit" type="number" min="0" max="100" style="width:50px" /> %</label></div>
+        <button id="expSave" class="btn primary">Salva esperimento</button>
+        <h3>Alert webhook</h3>
+        <div class="row"><label class="check">URL webhook <input id="alertUrl" type="url" style="width:240px" placeholder="https://hooks.example.com/..." /></label></div>
+        <button id="alertSave" class="btn primary">Salva webhook</button>
+      </section>
+    </aside>
   </main>
+
+  <section class="panel activity">
+    <div class="panel wide">
+      <h2>Classifica autoroute <span class="count">top 30 · score dinamico</span></h2>
+      <ol id="leaderboard" class="lb"></ol>
+    </div>
+    <div class="panel wide">
+      <h2>Richieste recenti</h2>
+      <div id="chart24" class="chart"></div>
+      <table class="logs">
+        <thead>
+          <tr><th>ora</th><th>modello</th><th>usato</th><th>proto</th><th>ms</th><th>ttft</th><th>tok</th><th>$</th><th></th></tr>
+        </thead>
+        <tbody id="logRows"><tr><td colspan="9" class="hint">nessuna richiesta</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
   <script src="/panel/app.js"></script>
 </body>
 </html>

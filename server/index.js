@@ -15,6 +15,9 @@ const storage = require('./helpers/storage');
 const routing = require('./helpers/routing');
 const cacheLib = require('./helpers/cache');
 const metricsLib = require('./helpers/metrics');
+const catalog = require('./helpers/catalog');
+const healthLib = require('./helpers/health');
+const securityLib = require('./helpers/security');
 
 const PORT = Number(process.env.AGG_PORT || process.env.MODELHUB_PORT || 9090);
 const APP_ROOT = process.pkg ? path.dirname(process.execPath) : path.join(__dirname, '..');
@@ -42,6 +45,46 @@ const ENHANCE_PLUGINS = {
 
 let models = {};
 let providers = {};
+
+// Circuit Breaker + Health Score
+const health = {}; // { providerName: { status: 'ok'|'degraded'|'down', fails: 0, lastFail: 0, cooldownUntil: 0, latencyAvg: 0, success: 0 } }
+const UPSTREAM_MAX_FAILURES = 3;
+const CIRCUIT_OPEN_COOLDOWN_BASE_MS = 60000; // 1 minute
+const CIRCUIT_OPEN_COOLDOWN_CAP_MS = 600000; // 10 minutes
+const CIRCUIT_OPEN_COOLDOWN_INC_FACTOR = 2; // Exponential backoff
+
+function markFail(providerName, modelId, retryAfterMs = 0) {
+  const key = modelId || providerName; // Use modelId if available, else providerName
+  const now = Date.now();
+  health[key] = health[key] || { status: 'ok', fails: 0, lastFail: 0, cooldownUntil: 0, latencyAvg: 0, success: 0 };
+  health[key].fails++;
+  health[key].lastFail = now;
+  health[key].status = health[key].fails >= UPSTREAM_MAX_FAILURES ? 'down' : 'degraded';
+  
+  let cooldown = (retryAfterMs || (CIRCUIT_OPEN_COOLDOWN_BASE_MS * Math.pow(CIRCUIT_OPEN_COOLDOWN_INC_FACTOR, Math.min(health[key].fails - 1, 5)))); // Cap exponential backoff
+  health[key].cooldownUntil = now + Math.min(cooldown, CIRCUIT_OPEN_COOLDOWN_CAP_MS);
+  logFn(`Provider '${key}' marked as ${health[key].status} (fails: ${health[key].fails}, cooldown: ${health[key].cooldownUntil})`);
+}
+
+function markOk(providerName, modelId, latencyMs) {
+  const key = modelId || providerName;
+  health[key] = health[key] || { status: 'ok', fails: 0, lastFail: 0, cooldownUntil: 0, latencyAvg: 0, success: 0 };
+  health[key].status = 'ok';
+  health[key].fails = 0;
+  health[key].cooldownUntil = 0;
+  // EWMA for latency: new = alpha * latencyMs + (1 - alpha) * old_avg
+  const alpha = 0.2;
+  health[key].latencyAvg = alpha * latencyMs + (1 - alpha) * health[key].latencyAvg;
+  health[key].success++;
+}
+
+function isCircuitOpen(providerName, modelId) {
+  const key = modelId || providerName;
+  const h = health[key];
+  if (!h) return false;
+  return h.status === 'down' && h.cooldownUntil > Date.now();
+}
+
 let authStore = { entries: [] };
 let prefs = storage.readJSON(PREFS_FILE, null);
 let pricing = storage.readJSON(PRICING_FILE, { currency: 'USD', providers: {}, models: {} });
@@ -53,6 +96,8 @@ let latency = {};
 let costTotal = 0;
 let tokensTotal = 0;
 let requestsTotal = 0;
+let retryCount = 0;
+let circuitOpenCount = 0;
 let startTime = Date.now();
 
 function logFn(msg) {
@@ -68,6 +113,9 @@ function normalizePrefs() {
   if (!prefs.features || typeof prefs.features !== 'object') prefs.features = {};
   if (!prefs.profiles || typeof prefs.profiles !== 'object') prefs.profiles = {};
   if (!prefs.enabled || typeof prefs.enabled !== 'object') prefs.enabled = {};
+  if (!prefs.freeMode || !['free-only', 'free-preferred', 'all'].includes(prefs.freeMode)) prefs.freeMode = 'free-preferred';
+  const added = catalog.mergeCatalog(config);
+  if (added > 0) storage.writeJSON(CONFIG_FILE, config, logFn);
 }
 
 function recordRequest(entry) {
@@ -209,6 +257,7 @@ function autorouteScore(id, meta, intent) {
   if (intent === 'code' && c.code) s += 4;
   if (intent === 'reasoning' && c.reasoning) s += 4;
   if (intent === 'fast' && c.fast) s += 4;
+  if (prefs.freeMode === 'free-preferred' && models[id].free) s += 5;
   s -= (usage[id] || 0) * 0.0001;
   return s;
 }
@@ -265,7 +314,7 @@ function selectModel(profile, body) {
     }
   }
   const ids = maybeExperiment(profile, profileIds(profile));
-  const valid = ids.filter((id) => models[id] && !modelsLib.CHAT_BLOCK.test(id) && prefs.enabled[id] !== false);
+  let valid = ids.filter((id) => models[id] && !modelsLib.CHAT_BLOCK.test(id) && prefs.enabled[id] !== false);
   const strategy = (prefs.strategy && prefs.strategy[profile]) || 'autoroute';
   if (strategy === 'order' || valid.length === 0) return valid[0] || ids[0];
   if (strategy === 'random') return valid[Math.floor(Math.random() * valid.length)];
@@ -287,8 +336,29 @@ function selectModel(profile, body) {
   if (strategy === 'least-used') {
     return valid.slice().sort((a, b) => (usage[a] || 0) - (usage[b] || 0))[0];
   }
+  // Circuit breaker: drop models whose provider circuit is OPEN before scoring.
+  const openCount = valid.filter((id) => healthLib.isCircuitOpen(models[id].provider, id)).length;
+  if (openCount < valid.length) {
+    const filtered = valid.filter((id) => !healthLib.isCircuitOpen(models[id].provider, id));
+    circuitOpenCount += valid.length - filtered.length;
+    valid = filtered;
+  }
+  // Free mode.
+  if (prefs.freeMode === 'free-only') {
+    const free = valid.filter((id) => models[id].free);
+    if (free.length) valid = free;
+  }
   const last = body.messages[body.messages.length - 1];
   const meta = modelsLib.classifyPrompt(last ? last.content : '');
+  if (prefs.freeMode === 'free-preferred') {
+    valid = valid.slice().sort((a, b) => {
+      const fa = models[a].free ? 0 : 1;
+      const fb = models[b].free ? 0 : 1;
+      if (fa !== fb) return fa - fb;
+      return autorouteScore(b, meta, body.intent) - autorouteScore(a, meta, body.intent);
+    });
+    return valid[0];
+  }
   return valid.slice().sort((a, b) => autorouteScore(b, meta, body.intent) - autorouteScore(a, meta, body.intent))[0];
 }
 
@@ -317,7 +387,10 @@ function streamUpstream(up, res, kind, modelId, onError, ctx) {
   });
   if (kind === 'openai') {
     up.pipe(res);
-    up.on('end', () => res.end());
+    up.on('end', () => {
+      res.end();
+      if (ctx && ctx.start && ctx.provider) healthLib.markOk(ctx.provider, modelId, Date.now() - ctx.start);
+    });
     up.on('error', onError);
     return;
   }
@@ -363,6 +436,7 @@ function completeNonStream(res, rawText, modelId, ctx) {
     const cost = tallyUsage(modelId, ctx.promptTokens, estimateTokens(text));
     recordKeyUsage(ctx.gkey, ctx.promptTokens + estimateTokens(text), cost);
     if (ctx.start) latency[modelId] = Date.now() - ctx.start;
+    if (ctx.start && ctx.provider) healthLib.markOk(ctx.provider, modelId, Date.now() - ctx.start);
     if (ctx.cacheIt) {
       if (responseCache.size >= 200) responseCache.delete(responseCache.keys().next().value);
       responseCache.set(ctx.cacheKey, { value: v, ts: Date.now() });
@@ -380,6 +454,14 @@ function proxyRequest(prov, modelId, data, res, onError, ctx) {
     if (prov.name === 'anthropic') headers['x-api-key'] = key;
     else headers['authorization'] = 'Bearer ' + key;
   }
+  // Transparent headers: forward client-supplied request metadata to upstream.
+  const forward = ['x-request-id', 'x-session-id', 'x-user-id', 'x-trace-id', 'x-correlation-id'];
+  for (const h of forward) {
+    const v = (ctx && ctx.headers && ctx.headers[h]) || (data && data.headers && data.headers[h]);
+    if (v) headers[h] = v;
+  }
+  const session = ctx && ctx.headers && ctx.headers['x-session-id'];
+  if (session && !payload.session_id) payload.session_id = session;
   const u = new URL(endpoint);
   const req = https.request(
     {
@@ -393,6 +475,13 @@ function proxyRequest(prov, modelId, data, res, onError, ctx) {
     (up) => {
       if (up.statusCode >= 400) {
         let buf = '';
+        const retryAfter = up.headers && up.headers['retry-after'];
+        let retryAfterMs = 0;
+        if (retryAfter) {
+          const secs = Number(retryAfter);
+          retryAfterMs = Number.isFinite(secs) ? secs * 1000 : 0;
+        }
+        healthLib.markFail(prov.name, modelId, retryAfterMs);
         up.on('data', (d) => (buf += d));
         up.on('end', () => onError(new Error('upstream ' + up.statusCode + ': ' + buf.slice(0, 200))));
         return;
@@ -422,8 +511,8 @@ function proxyRequest(prov, modelId, data, res, onError, ctx) {
       up.on('end', () => completeNonStream(res, raw, modelId, ctx));
     }
   );
-  req.on('timeout', () => req.destroy(new Error('upstream timeout')));
-  req.on('error', onError);
+  req.on('timeout', () => { healthLib.markFail(prov.name, modelId); req.destroy(new Error('upstream timeout')); });
+  req.on('error', (e) => { healthLib.markFail(prov.name, modelId); onError(e); });
   req.write(JSON.stringify(payload));
   req.end();
 }
@@ -575,7 +664,7 @@ function handleChat(body, req, res) {
   const doRequest = (modelId, done) => {
     const prov = providers[models[modelId].provider];
     if (!prov) return done(new Error('unknown provider for ' + modelId));
-    const ctx = { promptTokens, cacheKey: key, cacheIt: CACHE_ENABLED && !body.stream, start: Date.now(), gkey };
+    const ctx = { promptTokens, cacheKey: key, cacheIt: CACHE_ENABLED && !body.stream, start: Date.now(), gkey, provider: prov.name, headers: req.headers };
     proxyRequest(prov, modelId, Object.assign({}, data, { model: modelId }), res, done, ctx);
   };
 
@@ -706,7 +795,34 @@ function readJsonBody(req, res, cb) {
 
 function handleHub(req, res, p, u) {
   if (p === '/hub/state' && req.method === 'GET') {
-    return json(res, 200, { models: Object.keys(models).length, providers: Object.keys(providers).length, profiles: prefs.profiles, cacheHits, cache: CACHE_ENABLED, gatewayKeys: prefs.gatewayKeys || [] });
+    return json(res, 200, { models: Object.keys(models).length, providers: Object.keys(providers).length, profiles: prefs.profiles, cacheHits, cache: CACHE_ENABLED, gatewayKeys: prefs.gatewayKeys || [], freeMode: prefs.freeMode, health: Object.keys(healthLib.health).map((k) => ({ key: k, status: healthLib.health[k].status, fails: healthLib.health[k].fails })) });
+  }
+  if (p === '/hub/freemode' && req.method === 'GET') {
+    const free = Object.values(models).filter((m) => m.free);
+    return json(res, 200, { mode: prefs.freeMode, freeModels: free.length, totalModels: Object.keys(models).length, free: free.map((m) => ({ id: m.id, provider: m.provider })) });
+  }
+  if (p === '/hub/freemode' && req.method === 'POST') {
+    return readJsonBody(req, res, (body) => {
+      const modes = ['free-only', 'free-preferred', 'all'];
+      const mode = String(body && body.mode || '').trim();
+      if (!modes.includes(mode)) return sendError(res, 400, 'invalid mode: ' + mode);
+      prefs.freeMode = mode;
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, freeMode: prefs.freeMode });
+    });
+  }
+  if (p === '/hub/sync' && req.method === 'POST') {
+    // Sync gateway keys from auth store (named entries) — useful for bulk import.
+    return readJsonBody(req, res, (body) => {
+      const keys = Array.isArray(body && body.keys) ? body.keys.map((k) => String(k).trim()).filter(Boolean) : [];
+      if (!keys.length) return sendError(res, 400, 'keys required');
+      prefs.gatewayKeys = keys;
+      storage.writeJSON(PREFS_FILE, prefs, logFn);
+      json(res, 200, { ok: true, count: keys.length });
+    });
+  }
+  if (p === '/hub/sync' && req.method === 'GET') {
+    return json(res, 200, { gatewayKeys: prefs.gatewayKeys || [], auth: (authStore.entries || []).map((e) => e.name) });
   }
   if (p === '/hub/config' && req.method === 'GET') return json(res, 200, config);
   if (p === '/hub/prefs' && req.method === 'GET') return json(res, 200, prefs);
